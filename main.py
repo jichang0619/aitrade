@@ -6,6 +6,8 @@ import pandas as pd
 from dotenv import load_dotenv
 from binance_trading import BinanceTrading
 from ai_trading_strategy import AITradingStrategy
+import db_monitor
+import asyncio
 
 # Load environment variables
 load_dotenv()
@@ -22,6 +24,9 @@ openai_api_key = os.getenv("OPENAI_API_KEY")
 binance_trader = BinanceTrading(binance_api_key, binance_api_secret)
 ai_strategy = AITradingStrategy(openai_api_key)
 
+def run_monitor():
+    db_monitor.main()
+    
 def init_db():
     conn = sqlite3.connect('futures_trades.db')
     c = conn.cursor()
@@ -200,4 +205,5 @@ if __name__ == "__main__":
     # Run the job every 30 minutes
     while True:
         job()
+        asyncio.run(db_monitor.main())
         time.sleep(1800)
