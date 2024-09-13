@@ -28,22 +28,52 @@ class BinanceTrading:
                 return None
         return self.symbol_info[symbol]
 
-    def adjust_quantity(self, symbol, quantity):
+    def adjust_quantity(self, symbol, desired_amount, current_price):
+        logger.info(f"Adjusting quantity for {symbol}. Desired amount: {desired_amount} USDT, Current price: {current_price}")
+        
         symbol_info = self.get_symbol_info(symbol)
         if symbol_info is None:
-            return quantity
+            logger.warning(f"Symbol info not found for {symbol}. Returning None.")
+            return None
 
-        step_size = float(next(filter(lambda x: x['filterType'] == 'LOT_SIZE', symbol_info['filters']))['stepSize'])
-        precision = int(round(-math.log(step_size, 10), 0))
-        
-        adjusted_quantity = math.floor(quantity * (10 ** precision)) / (10 ** precision)
-        
-        min_qty = float(next(filter(lambda x: x['filterType'] == 'LOT_SIZE', symbol_info['filters']))['minQty'])
-        if adjusted_quantity < min_qty:
-            logger.warning(f"Adjusted quantity {adjusted_quantity} is less than minimum quantity {min_qty}. Setting to minimum.")
-            adjusted_quantity = min_qty
+        lot_size_filter = next((f for f in symbol_info['filters'] if f['filterType'] == 'LOT_SIZE'), None)
+        min_notional_filter = next((f for f in symbol_info['filters'] if f['filterType'] == 'MIN_NOTIONAL'), None)
 
-        return adjusted_quantity
+        if lot_size_filter is None or min_notional_filter is None:
+            logger.warning(f"Required filters not found for {symbol}. Returning None.")
+            return None
+
+        step_size = float(lot_size_filter['stepSize'])
+        min_qty = float(lot_size_filter['minQty'])
+        min_notional = float(min_notional_filter['notional'])
+        
+        logger.info(f"Step size: {step_size}, Minimum quantity: {min_qty}, Minimum notional: {min_notional}")
+
+        # Calculate initial quantity
+        quantity = desired_amount / current_price
+
+        # Adjust quantity to step size
+        quantity = math.floor(quantity / step_size) * step_size
+
+        # Ensure the quantity meets the minimum notional value
+        while quantity * current_price < min_notional:
+            quantity += step_size
+
+        # Ensure the quantity is not less than the minimum quantity
+        quantity = max(quantity, min_qty)
+
+        # Round to appropriate decimal places
+        precision = int(round(-math.log10(step_size), 0))
+        quantity = round(quantity, precision)
+
+        order_value = quantity * current_price
+        logger.info(f"Final adjusted quantity: {quantity}, Order value: {order_value} USDT")
+
+        if order_value < min_notional:
+            logger.warning(f"Cannot meet minimum notional value of {min_notional} USDT. Order value: {order_value} USDT")
+            return None
+
+        return quantity
 
     def adjust_price(self, symbol, price):
         symbol_info = self.get_symbol_info(symbol)
@@ -124,9 +154,7 @@ class BinanceTrading:
         except BinanceAPIException as e:
             logger.error(f"Error fetching available balance: {e}")
             return None
-        
-
-            
+    
     def execute_position_action(self, action, symbol, amount, leverage, use_limit=True, wait_time=300):
         try:
             max_leverage = self.get_max_leverage(symbol)
@@ -148,21 +176,30 @@ class BinanceTrading:
             symbol_info = self.get_symbol_info(symbol)
             min_notional = float(next(filter(lambda x: x['filterType'] == 'MIN_NOTIONAL', symbol_info['filters']))['notional'])
             
-            # Calculate the quantity considering leverage
-            quantity = (amount * leverage) / current_price
-            
-            # Ensure the order meets the minimum notional value
-            min_qty = max(min_notional / current_price, float(next(filter(lambda x: x['filterType'] == 'LOT_SIZE', symbol_info['filters']))['minQty']))
-            
+            # leverage를 고려한 주문 금액 계산
+            leveraged_amount = amount * leverage
+
+            # 수량 조정
+            quantity = self.adjust_quantity(symbol, leveraged_amount, current_price)
+
+            if quantity is None:
+                return {"status": "failed", "reason": "Cannot meet minimum order requirements"}
+
+            # 최대 포지션 크기 확인
             max_position_size = (available_balance * leverage) / current_price
-            quantity = self.adjust_quantity(symbol, max(min(quantity, max_position_size), min_qty))
+            if quantity > max_position_size:
+                logger.warning(f"Adjusted quantity {quantity} exceeds max position size {max_position_size}. Limiting to max position size.")
+                quantity = max_position_size
+                # 다시 한 번 adjust_quantity를 호출하여 step size에 맞추어 조정
+                quantity = self.adjust_quantity(symbol, quantity * current_price, current_price)
+                if quantity is None:
+                    return {"status": "failed", "reason": "Cannot meet minimum order requirements after limiting to max position size"}
 
             logger.info(f"Available balance: {available_balance} USDT")
             logger.info(f"Current price: {current_price} USDT")
             logger.info(f"Leverage: {leverage}x")
             logger.info(f"Max position size: {max_position_size} {symbol}")
-            logger.info(f"Minimum quantity: {min_qty} {symbol}")
-            logger.info(f"Adjusted quantity: {quantity} {symbol}")
+            logger.info(f"Final adjusted quantity: {quantity} {symbol}")
             logger.info(f"Order value (with leverage): {quantity * current_price} USDT")
 
             if quantity * current_price < min_notional:

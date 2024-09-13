@@ -254,7 +254,6 @@ def ai_trading():
             current_position = position if position and float(position.get("positionAmt", 0)) != 0 else None
             
             result = ai_strategy.get_ai_trading_decision(usdt_balance, btc_price, df_daily, df_hourly, fear_greed_index, current_position)
-            
             if result is None:
                 logger.error("Failed to get AI trading decision.")
                 return
@@ -268,6 +267,7 @@ def ai_trading():
             binance_trader.set_margin_type(symbol, margin_type)
 
             # Calculate the trade amount considering the leverage
+            # 여기서 trade_amount는 레버리지를 고려하지 않은 순수한 USDT 금액
             trade_amount = (usdt_balance * result.percentage) / 100
 
             if result.decision in ["buy", "sell"]:
@@ -315,7 +315,7 @@ async def main():
     while True:
         await run_trading_job()
         await db_monitor.main()
-        await asyncio.sleep(80)  # 30분 대기
+        await asyncio.sleep(1800)  # 30분 대기
 
 if __name__ == "__main__":
     init_db()
