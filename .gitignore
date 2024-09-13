@@ -1,23 +1,2 @@
 # Ignore .env file
-   .env
-
-   # Python
-   __pycache__/
-   *.pyc
-   *.pyo
-   *.pyd
-
-   # Virtual environments
-   .Python
-   env/
-   venv/
-
-   # Logs
-   *.log
-
-   # Database
-   *.db
-
-   # Add any other files or directories you want to ignore
-   
 *.env
