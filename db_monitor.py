@@ -26,23 +26,23 @@ def fetch_last_trade(db_path):
     conn.close()
     return trade
 
-async def send_trade_update():
+async def send_trade_update(bot):
     trade = fetch_last_trade(DB_PATH)
     if trade:
-        trade_message = f"Last trade:\nID: {trade[0]}\nSymbol: {trade[1]}\nPrice: {trade[2]}\nQuantity: {trade[3]}"
+        trade_message = f"Last trade attempt:\nTrade Num: {trade[0]}\nTime: {trade[1]}\nDecision: {trade[2]}\nPercentage: {trade[3]}\nStatus: {trade[8]}\nReason: {trade[9]}"
         try:
-            # Use HTML or Markdown formatting directly
             html_message = trade_message.replace('-', '&#45;')
             await bot.send_message(chat_id=CHAT_ID, text=html_message, parse_mode="HTML")
             logger.info("Message sent successfully.")
         except Exception as e:
             logger.error(f"Error sending message: {e}")
-        finally:
-            # Clean up resources or handle post-message tasks if necessary
-            pass  # No additional actions required
 
 async def main():
-    await send_trade_update()
+    bot = Bot(token=TELEGRAM_TOKEN)
+    try:
+        await send_trade_update(bot)
+    finally:
+        await bot.session.close()
 
 if __name__ == '__main__':
     asyncio.run(main())

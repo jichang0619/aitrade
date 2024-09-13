@@ -11,18 +11,22 @@ logger = logging.getLogger(__name__)
 class BinanceTrading:
     def __init__(self, api_key, api_secret):
         self.client = Client(api_key, api_secret)
+        self.symbol_info = {}
 
     def get_symbol_info(self, symbol):
-        try:
-            exchange_info = self.client.futures_exchange_info()
-            for sym_info in exchange_info['symbols']:
-                if sym_info['symbol'] == symbol:
-                    return sym_info
-            logger.error(f"Symbol information for {symbol} not found.")
-            return None
-        except BinanceAPIException as e:
-            logger.error(f"Error fetching symbol information: {e}")
-            return None
+        if symbol not in self.symbol_info:
+            try:
+                exchange_info = self.client.futures_exchange_info()
+                for sym_info in exchange_info['symbols']:
+                    if sym_info['symbol'] == symbol:
+                        self.symbol_info[symbol] = sym_info
+                        return sym_info
+                logger.error(f"Symbol information for {symbol} not found.")
+                return None
+            except BinanceAPIException as e:
+                logger.error(f"Error fetching symbol information: {e}")
+                return None
+        return self.symbol_info[symbol]
 
     def adjust_quantity(self, symbol, quantity):
         symbol_info = self.get_symbol_info(symbol)
@@ -31,7 +35,15 @@ class BinanceTrading:
 
         step_size = float(next(filter(lambda x: x['filterType'] == 'LOT_SIZE', symbol_info['filters']))['stepSize'])
         precision = int(round(-math.log(step_size, 10), 0))
-        return round(quantity, precision)
+        
+        adjusted_quantity = math.floor(quantity * (10 ** precision)) / (10 ** precision)
+        
+        min_qty = float(next(filter(lambda x: x['filterType'] == 'LOT_SIZE', symbol_info['filters']))['minQty'])
+        if adjusted_quantity < min_qty:
+            logger.warning(f"Adjusted quantity {adjusted_quantity} is less than minimum quantity {min_qty}. Setting to minimum.")
+            adjusted_quantity = min_qty
+
+        return adjusted_quantity
 
     def adjust_price(self, symbol, price):
         symbol_info = self.get_symbol_info(symbol)
@@ -51,18 +63,118 @@ class BinanceTrading:
             logger.error(f"Error fetching futures account balance: {e}")
             return 0.0
 
+    def set_stop_loss(self, symbol, side, quantity, entry_price, risk_percentage=2.5):
+        """
+        Set a stop loss order for a given position.
+        
+        :param symbol: Trading pair symbol (e.g., 'BTCUSDT')
+        :param side: 'BUY' for long positions, 'SELL' for short positions
+        :param quantity: Position size
+        :param entry_price: Entry price of the position
+        :param risk_percentage: Percentage of entry price to set as stop loss (default 2%)
+        :return: Result of the stop loss order placement
+        """
+        try:
+            symbol_info = self.client.get_symbol_info(symbol)
+            price_filter = next(filter(lambda f: f['filterType'] == 'PRICE_FILTER', symbol_info['filters']))
+            tick_size = float(price_filter['tickSize'])
+
+            if side == 'BUY':  # For long positions
+                stop_price = entry_price * (1 - risk_percentage / 100)
+                stop_side = 'SELL'
+            else:  # For short positions
+                stop_price = entry_price * (1 + risk_percentage / 100)
+                stop_side = 'BUY'
+            
+            # Round the stop price to the nearest valid price
+            stop_price = round(stop_price / tick_size) * tick_size
+            
+            stop_loss_order = self.client.futures_create_order(
+                symbol=symbol,
+                side=stop_side,
+                type='STOP_MARKET',
+                quantity=quantity,
+                stopPrice=stop_price
+            )
+            
+            logger.info(f"Stop loss order placed: {stop_loss_order}")
+            return {"status": "success", "order": stop_loss_order}
+        
+        except BinanceAPIException as e:
+            logger.error(f"Error setting stop loss: {e}")
+            return {"status": "failed", "reason": str(e)}
+        except Exception as e:
+            logger.error(f"Unexpected error setting stop loss: {e}")
+            return {"status": "failed", "reason": str(e)}
+        
+    def get_max_leverage(self, symbol):
+        try:
+            leverage_brackets = self.client.futures_leverage_bracket(symbol=symbol)
+            return int(leverage_brackets[0]['brackets'][0]['initialLeverage'])
+        except BinanceAPIException as e:
+            logger.error(f"Error fetching max leverage: {e}")
+            return None
+
+    def get_available_balance(self, symbol):
+        try:
+            account_info = self.client.futures_account()
+            for asset in account_info['assets']:
+                if asset['asset'] == 'USDT':  # We're always trading with USDT in this case
+                    return float(asset['availableBalance'])
+        except BinanceAPIException as e:
+            logger.error(f"Error fetching available balance: {e}")
+            return None
+        
+
+            
     def execute_position_action(self, action, symbol, amount, leverage, use_limit=True, wait_time=300):
         try:
-            quantity = self.adjust_quantity(symbol, amount * leverage)
+            max_leverage = self.get_max_leverage(symbol)
+            if max_leverage is None:
+                return {"status": "failed", "reason": "Unable to fetch max leverage"}
             
+            if leverage > max_leverage:
+                logger.warning(f"Requested leverage {leverage} exceeds max leverage {max_leverage}. Using max leverage.")
+                leverage = max_leverage
+
+            available_balance = self.get_available_balance(symbol)
+            if available_balance is None:
+                return {"status": "failed", "reason": "Unable to fetch available balance"}
+
+            current_price = self.get_binance_futures_price(symbol)
+            if current_price is None:
+                return {"status": "failed", "reason": "Unable to fetch current price"}
+
+            symbol_info = self.get_symbol_info(symbol)
+            min_notional = float(next(filter(lambda x: x['filterType'] == 'MIN_NOTIONAL', symbol_info['filters']))['notional'])
+            
+            # Calculate the quantity considering leverage
+            quantity = (amount * leverage) / current_price
+            
+            # Ensure the order meets the minimum notional value
+            min_qty = max(min_notional / current_price, float(next(filter(lambda x: x['filterType'] == 'LOT_SIZE', symbol_info['filters']))['minQty']))
+            
+            max_position_size = (available_balance * leverage) / current_price
+            quantity = self.adjust_quantity(symbol, max(min(quantity, max_position_size), min_qty))
+
+            logger.info(f"Available balance: {available_balance} USDT")
+            logger.info(f"Current price: {current_price} USDT")
+            logger.info(f"Leverage: {leverage}x")
+            logger.info(f"Max position size: {max_position_size} {symbol}")
+            logger.info(f"Minimum quantity: {min_qty} {symbol}")
+            logger.info(f"Adjusted quantity: {quantity} {symbol}")
+            logger.info(f"Order value (with leverage): {quantity * current_price} USDT")
+
+            if quantity * current_price < min_notional:
+                return {"status": "failed", "reason": f"Insufficient balance. Minimum order value is {min_notional} USDT."}
+
             if use_limit:
-                current_price = self.get_binance_futures_price(symbol)
                 if action in ['open_long', 'close_short']:
+                    side = "BUY"
                     limit_price = self.adjust_price(symbol, current_price * 1.001)  # 0.1% higher
-                    side = 'BUY'
                 else:
+                    side = "SELL"
                     limit_price = self.adjust_price(symbol, current_price * 0.999)  # 0.1% lower
-                    side = 'SELL'
                 
                 return self.execute_limit_order_with_fallback(symbol, side, quantity, limit_price, wait_time)
             else:
@@ -74,10 +186,14 @@ class BinanceTrading:
                 )
                 logger.info(f"{action.capitalize()} executed successfully: {quantity} {symbol}")
                 return {"status": "success", "order": order}
-        except Exception as e:
-            logger.error(f"Error executing {action}: {e}")
-            return None
 
+        except BinanceAPIException as e:
+            logger.error(f"Binance API error in execute_position_action: {e}")
+            return {"status": "failed", "reason": str(e)}
+        except Exception as e:
+            logger.error(f"Unexpected error in execute_position_action: {e}")
+            return {"status": "failed", "reason": str(e)}
+            
     def open_long_position(self, symbol, amount, leverage, use_limit=True, wait_time=300):
         return self.execute_position_action('open_long', symbol, amount, leverage, use_limit, wait_time)
 
