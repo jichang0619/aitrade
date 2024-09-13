@@ -1,72 +1,77 @@
-🤖 Bitcoin Trading Bot
-Show Image
-Show Image
-Show Image
+# 🤖 Bitcoin Trading Bot
+
+![Python](https://img.shields.io/badge/Python-3.7%2B-blue)
+![Binance](https://img.shields.io/badge/Binance-Futures-yellow)
+![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4-green)
+
 An automated Bitcoin trading bot leveraging AI-driven decision-making and technical analysis on the Binance futures market.
-📚 Table of Contents
 
-Components
-Setup
-Usage
-Disclaimer
+## 📚 Table of Contents
 
-🧩 Components
-1. Main Script (main.py)
+- [Components](#components)
+- [Setup](#setup)
+- [Usage](#usage)
+- [Disclaimer](#disclaimer)
+
+## 🧩 Components
+
+### 1. Main Script (`main.py`)
+
 Orchestrates the entire trading process:
 
-🔗 Initializes API connections
-🗃️ Sets up SQLite database
-🔄 Implements main trading loop
-📊 Handles order execution and position management
+- 🔗 Initializes API connections
+- 🗃️ Sets up SQLite database
+- 🔄 Implements main trading loop
+- 📊 Handles order execution and position management
 
-Key Functions:
+**Key Functions:**
+- `init_db()`: Initializes the SQLite database
+- `ai_trading()`: Main trading function
+- `execute_trade()`: Handles order placement
 
-init_db(): Initializes the SQLite database
-ai_trading(): Main trading function
-execute_trade(): Handles order placement
+### 2. Binance Trading Module (`binance_trading.py`)
 
-2. Binance Trading Module (binance_trading.py)
 Manages all Binance Futures API interactions:
 
-💼 Account and balance management
-📈 Order placement and management
-📉 Market data retrieval
+- 💼 Account and balance management
+- 📈 Order placement and management
+- 📉 Market data retrieval
 
-Key Functions:
+**Key Functions:**
+- `open_long_position()`, `open_short_position()`
+- `close_long_position()`, `close_short_position()`
+- `get_ohlcv()`: Retrieve historical price data
+- `execute_limit_order_with_fallback()`
 
-open_long_position(), open_short_position()
-close_long_position(), close_short_position()
-get_ohlcv(): Retrieve historical price data
-execute_limit_order_with_fallback()
+### 3. AI Trading Strategy Module (`ai_trading_strategy.py`)
 
-3. AI Trading Strategy Module (ai_trading_strategy.py)
 Implements the AI-driven trading strategy:
 
-📊 Calculates technical indicators
-🧠 Interacts with OpenAI's GPT model
-📝 Generates performance reflections
+- 📊 Calculates technical indicators
+- 🧠 Interacts with OpenAI's GPT model
+- 📝 Generates performance reflections
 
-Key Functions:
+**Key Functions:**
+- `add_indicators()`: Adds technical indicators to price data
+- `get_ai_trading_decision()`: Gets trading decisions from GPT model
+- `generate_reflection()`: Analyzes recent trades and market conditions
 
-add_indicators(): Adds technical indicators to price data
-get_ai_trading_decision(): Gets trading decisions from GPT model
-generate_reflection(): Analyzes recent trades and market conditions
+## 🛠 Setup
 
-🛠 Setup
+1. Install required dependencies:
 
-Install required dependencies:
-Copypip install binance-futures openai pandas ta pydantic
-
-Set up environment variables:
-Copyexport BINANCE_ACCESS_KEY=your_binance_key
+2. Set up environment variables:
+pip install binance-futures openai pandas ta pydantic
+Copy
+2. Set up environment variables:
+export BINANCE_ACCESS_KEY=your_binance_key
 export BINANCE_SECRET_KEY=your_binance_secret
 export OPENAI_API_KEY=your_openai_key
-
-Initialize the SQLite database:
-pythonCopyfrom main import init_db
+Copy
+3. Initialize the SQLite database:
+```python
+from main import init_db
 init_db()
-
-
 🚀 Usage
 Run the main script to start the trading bot:
 Copypython main.py
