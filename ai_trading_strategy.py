@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from openai import OpenAI
 import requests
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -83,20 +84,30 @@ class AITradingStrategy:
                 ]
             )
 
-            result = json.loads(response.choices[0].message.content)
-            
-            # Add error handling and logging
+            # Extract JSON from the response
+            content = response.choices[0].message.content
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group())
+            else:
+                raise ValueError("No JSON object found in the response")
+
+            # Validate the result
             if not isinstance(result, dict) or not all(key in result for key in ["decision", "percentage", "reason"]):
-                logger.error(f"Unexpected response format: {result}")
-                return None
+                raise ValueError(f"Unexpected response format: {result}")
 
             return TradingDecision(**result)
         except json.JSONDecodeError as e:
             logger.error(f"JSON parsing error: {e}")
-            logger.error(f"Raw response content: {response.choices[0].message.content}")
+            logger.error(f"Raw response content: {content}")
+            return None
+        except ValueError as e:
+            logger.error(f"Value error: {e}")
+            logger.error(f"Raw response content: {content}")
             return None
         except Exception as e:
             logger.error(f"Error getting AI trading decision: {e}")
+            logger.error(f"Raw response content: {content}")
             return None
 
     def get_position_return(self, current_position, current_price):

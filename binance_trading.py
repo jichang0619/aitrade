@@ -4,6 +4,7 @@ from binance.exceptions import BinanceAPIException
 import pandas as pd
 import requests
 import time
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -11,22 +12,35 @@ class BinanceTrading:
     def __init__(self, api_key, api_secret):
         self.client = Client(api_key, api_secret)
 
-    def get_symbol_precision(self, symbol):
+    def get_symbol_info(self, symbol):
         try:
             exchange_info = self.client.futures_exchange_info()
-            for symbol_info in exchange_info['symbols']:
-                if symbol_info['symbol'] == symbol:
-                    return symbol_info['quantityPrecision']
-            logger.error(f"Precision for symbol {symbol} not found.")
+            for sym_info in exchange_info['symbols']:
+                if sym_info['symbol'] == symbol:
+                    return sym_info
+            logger.error(f"Symbol information for {symbol} not found.")
             return None
         except BinanceAPIException as e:
-            logger.error(f"Error fetching symbol precision: {e}")
+            logger.error(f"Error fetching symbol information: {e}")
             return None
 
-    def adjust_precision(self, quantity, precision):
-        if precision is None:
+    def adjust_quantity(self, symbol, quantity):
+        symbol_info = self.get_symbol_info(symbol)
+        if symbol_info is None:
             return quantity
+
+        step_size = float(next(filter(lambda x: x['filterType'] == 'LOT_SIZE', symbol_info['filters']))['stepSize'])
+        precision = int(round(-math.log(step_size, 10), 0))
         return round(quantity, precision)
+
+    def adjust_price(self, symbol, price):
+        symbol_info = self.get_symbol_info(symbol)
+        if symbol_info is None:
+            return price
+
+        tick_size = float(next(filter(lambda x: x['filterType'] == 'PRICE_FILTER', symbol_info['filters']))['tickSize'])
+        precision = int(round(-math.log(tick_size, 10), 0))
+        return round(price, precision)
 
     def get_futures_account_balance(self):
         try:
@@ -37,127 +51,44 @@ class BinanceTrading:
             logger.error(f"Error fetching futures account balance: {e}")
             return 0.0
 
-    def open_long_position(self, symbol, amount, leverage, use_limit=True, wait_time=300):
+    def execute_position_action(self, action, symbol, amount, leverage, use_limit=True, wait_time=300):
         try:
-            precision = self.get_symbol_precision(symbol)
-            if precision is None:
-                logger.error("Unable to retrieve precision for symbol.")
-                return None
+            quantity = self.adjust_quantity(symbol, amount * leverage)
             
-            quantity = amount * leverage
-            adjusted_quantity = self.adjust_precision(quantity, precision)
-
             if use_limit:
                 current_price = self.get_binance_futures_price(symbol)
-                limit_price = current_price * 1.001  # 0.1% higher price
-                limit_price = self.adjust_price(symbol, limit_price)
+                if action in ['open_long', 'close_short']:
+                    limit_price = self.adjust_price(symbol, current_price * 1.001)  # 0.1% higher
+                    side = 'BUY'
+                else:
+                    limit_price = self.adjust_price(symbol, current_price * 0.999)  # 0.1% lower
+                    side = 'SELL'
                 
-                return self.execute_limit_order_with_fallback(
-                    symbol, 'BUY', adjusted_quantity, limit_price, wait_time
-                )
+                return self.execute_limit_order_with_fallback(symbol, side, quantity, limit_price, wait_time)
             else:
                 order = self.client.futures_create_order(
                     symbol=symbol,
-                    side="BUY",
+                    side="BUY" if action in ['open_long', 'close_short'] else "SELL",
                     type="MARKET",
-                    quantity=adjusted_quantity
+                    quantity=quantity
                 )
-                logger.info(f"Long position opened successfully: {adjusted_quantity} {symbol}")
+                logger.info(f"{action.capitalize()} executed successfully: {quantity} {symbol}")
                 return {"status": "success", "order": order}
         except Exception as e:
-            logger.error(f"Error opening long position: {e}")
+            logger.error(f"Error executing {action}: {e}")
             return None
+
+    def open_long_position(self, symbol, amount, leverage, use_limit=True, wait_time=300):
+        return self.execute_position_action('open_long', symbol, amount, leverage, use_limit, wait_time)
 
     def open_short_position(self, symbol, amount, leverage, use_limit=True, wait_time=300):
-        try:
-            precision = self.get_symbol_precision(symbol)
-            if precision is None:
-                logger.error("Unable to retrieve precision for symbol.")
-                return None
-            
-            quantity = amount * leverage
-            adjusted_quantity = self.adjust_precision(quantity, precision)
-
-            if use_limit:
-                current_price = self.get_binance_futures_price(symbol)
-                limit_price = current_price * 0.999  # 0.1% lower price
-                limit_price = self.adjust_price(symbol, limit_price)
-                
-                return self.execute_limit_order_with_fallback(
-                    symbol, 'SELL', adjusted_quantity, limit_price, wait_time
-                )
-            else:
-                order = self.client.futures_create_order(
-                    symbol=symbol,
-                    side="SELL",
-                    type="MARKET",
-                    quantity=adjusted_quantity
-                )
-                logger.info(f"Short position opened successfully: {adjusted_quantity} {symbol}")
-                return {"status": "success", "order": order}
-        except Exception as e:
-            logger.error(f"Error opening short position: {e}")
-            return None
+        return self.execute_position_action('open_short', symbol, amount, leverage, use_limit, wait_time)
 
     def close_long_position(self, symbol, position_amt, use_limit=True, wait_time=300):
-        try:
-            precision = self.get_symbol_precision(symbol)
-            if precision is None:
-                logger.error("Unable to retrieve precision for symbol.")
-                return None
-            
-            adjusted_quantity = self.adjust_precision(position_amt, precision)
-
-            if use_limit:
-                current_price = self.get_binance_futures_price(symbol)
-                limit_price = current_price * 1.001  # 0.1% higher price
-                limit_price = self.adjust_price(symbol, limit_price)
-                
-                return self.execute_limit_order_with_fallback(
-                    symbol, 'SELL', adjusted_quantity, limit_price, wait_time
-                )
-            else:
-                order = self.client.futures_create_order(
-                    symbol=symbol,
-                    side="SELL",
-                    type="MARKET",
-                    quantity=adjusted_quantity
-                )
-                logger.info(f"Long position closed successfully: {adjusted_quantity} {symbol}")
-                return {"status": "success", "order": order}
-        except Exception as e:
-            logger.error(f"Error closing long position: {e}")
-            return None
+        return self.execute_position_action('close_long', symbol, position_amt, 1, use_limit, wait_time)
 
     def close_short_position(self, symbol, position_amt, use_limit=True, wait_time=300):
-        try:
-            precision = self.get_symbol_precision(symbol)
-            if precision is None:
-                logger.error("Unable to retrieve precision for symbol.")
-                return None
-            
-            adjusted_quantity = self.adjust_precision(position_amt, precision)
-
-            if use_limit:
-                current_price = self.get_binance_futures_price(symbol)
-                limit_price = current_price * 0.999  # 0.1% lower price
-                limit_price = self.adjust_price(symbol, limit_price)
-                
-                return self.execute_limit_order_with_fallback(
-                    symbol, 'BUY', adjusted_quantity, limit_price, wait_time
-                )
-            else:
-                order = self.client.futures_create_order(
-                    symbol=symbol,
-                    side="BUY",
-                    type="MARKET",
-                    quantity=adjusted_quantity
-                )
-                logger.info(f"Short position closed successfully: {adjusted_quantity} {symbol}")
-                return {"status": "success", "order": order}
-        except Exception as e:
-            logger.error(f"Error closing short position: {e}")
-            return None
+        return self.execute_position_action('close_short', symbol, position_amt, 1, use_limit, wait_time)
 
     def get_binance_futures_price(self, symbol='BTCUSDT'):
         try:
@@ -236,20 +167,8 @@ class BinanceTrading:
             logger.error(f"Error fetching OHLCV data: {e}")
             return None
 
-    def adjust_price(self, symbol, price):
-        try:
-            exchange_info = self.client.futures_exchange_info()
-            symbol_info = next(filter(lambda x: x['symbol'] == symbol, exchange_info['symbols']))
-            price_filter = next(filter(lambda x: x['filterType'] == 'PRICE_FILTER', symbol_info['filters']))
-            tick_size = float(price_filter['tickSize'])
-            return round(price / tick_size) * tick_size
-        except Exception as e:
-            logger.error(f"Error adjusting price: {e}")
-            return price
-
     def execute_limit_order_with_fallback(self, symbol, side, quantity, price, wait_time=300):
         try:
-            # Place the initial limit order
             limit_order = self.client.futures_create_order(
                 symbol=symbol,
                 side=side,
@@ -264,18 +183,15 @@ class BinanceTrading:
             start_time = time.time()
 
             while time.time() - start_time < wait_time:
-                # Check the status of the order
                 order_status = self.client.futures_get_order(symbol=symbol, orderId=order_id)
 
                 if order_status['status'] == 'FILLED':
                     return {"status": "success", "order": order_status}
 
                 if order_status['status'] == 'PARTIALLY_FILLED':
-                    # Calculate the filled quantity
                     filled_qty = float(order_status['executedQty'])
                     remaining_qty = quantity - filled_qty
 
-                    # If 5 minutes have passed, cancel the remaining order and place a market order
                     if time.time() - start_time >= 300:
                         self.client.futures_cancel_order(symbol=symbol, orderId=order_id)
                         market_order = self.client.futures_create_order(
@@ -286,9 +202,8 @@ class BinanceTrading:
                         )
                         return {"status": "partial_limit_full_market", "limit_order": order_status, "market_order": market_order}
 
-                time.sleep(10)  # Wait for 10 seconds before checking again
+                time.sleep(10)
 
-            # If we've waited for 5 minutes, cancel the order and place a market order
             self.client.futures_cancel_order(symbol=symbol, orderId=order_id)
             market_order = self.client.futures_create_order(
                 symbol=symbol,
