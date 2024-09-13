@@ -84,7 +84,17 @@ class AITradingStrategy:
             )
 
             result = json.loads(response.choices[0].message.content)
+            
+            # Add error handling and logging
+            if not isinstance(result, dict) or not all(key in result for key in ["decision", "percentage", "reason"]):
+                logger.error(f"Unexpected response format: {result}")
+                return None
+
             return TradingDecision(**result)
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON parsing error: {e}")
+            logger.error(f"Raw response content: {response.choices[0].message.content}")
+            return None
         except Exception as e:
             logger.error(f"Error getting AI trading decision: {e}")
             return None
