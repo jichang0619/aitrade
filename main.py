@@ -197,7 +197,7 @@ if __name__ == "__main__":
         finally:
             trading_in_progress = False
 
-    # Run the job every 20 minutes
+    # Run the job every 5 minutes
     while True:
         job()
-        time.sleep(1200)  # Sleep for 20 minutes
+        time.sleep(300)  # Sleep for 5 minutes
