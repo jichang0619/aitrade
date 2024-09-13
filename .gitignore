@@ -1,0 +1,12 @@
+# Ignore .env file
+   .env
+
+   # Add other files and directories to ignore
+   __pycache__/
+   *.pyc
+   *.pyo
+   *.pyd
+   .Python
+   env/
+   venv/
+   *.log
