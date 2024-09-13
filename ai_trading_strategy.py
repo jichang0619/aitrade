@@ -129,9 +129,21 @@ class AITradingStrategy:
     def generate_reflection(self, trades_df, current_market_data):
         if trades_df is None or trades_df.empty:
             performance = 0
-            reflection_message = "No trading data available for performance analysis."
+            trades_summary = "No trading data available for performance analysis."
         else:
             performance = self.calculate_performance(trades_df)
+            # Summarize trade data
+            trades_summary = f"""
+            Total trades: {len(trades_df)}
+            Average trade size: {trades_df['percentage'].mean():.2f}%
+            Most common decision: {trades_df['decision'].mode().values[0]}
+            """
+
+        # Summarize current market data
+        market_summary = f"""
+        Current BTC Price: {current_market_data['btc_price']}
+        Fear and Greed Index: {current_market_data['fear_greed_index']['value']} ({current_market_data['fear_greed_index']['value_classification']})
+        """
 
         try:
             response = self.openai_client.chat.completions.create(
@@ -144,11 +156,11 @@ class AITradingStrategy:
                     {
                         "role": "user",
                         "content": f"""
-                        Recent trading data:
-                        {trades_df.to_json(orient='records') if trades_df is not None else "No trades data available."}
+                        Recent trading summary:
+                        {trades_summary}
                         
-                        Current market data:
-                        {current_market_data}
+                        Current market summary:
+                        {market_summary}
                         
                         Overall performance in the last 7 days: {performance:.2f}%
                         
