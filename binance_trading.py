@@ -27,7 +27,7 @@ class BinanceTrading:
                 logger.error(f"Error fetching symbol information: {e}")
                 return None
         return self.symbol_info[symbol]
-    
+  
     def adjust_quantity(self, symbol, amount, current_price, action):
         logger.info(f"Adjusting quantity for {symbol}. Amount: {amount}, Current price: {current_price}, Action: {action}")
         
@@ -51,31 +51,34 @@ class BinanceTrading:
 
         # Calculate quantity based on action type
         if action in ['open_long', 'open_short']:
-            # For opening positions, use USDT amount (leverage already applied)
+            # For opening positions, amount is in USDT
             quantity = amount / current_price
         else:  # close_long or close_short
-            # For closing positions, amount is already in the asset (e.g., BTC)
+            # For closing positions, amount is already in BTC
             quantity = amount
 
         # Adjust quantity to step size
         quantity = math.floor(quantity / step_size) * step_size
 
-        # Ensure the quantity meets the minimum notional value and is not less than the minimum quantity
-        quantity = max(quantity, min_qty, min_notional / current_price)
+        # Ensure the quantity meets the minimum notional value and minimum quantity
+        if action in ['open_long', 'open_short']:
+            # For opening positions, check against USDT value
+            while quantity * current_price < min_notional:
+                quantity += step_size
+        else:
+            # For closing positions, check against BTC quantity
+            while quantity < min_qty:
+                quantity += step_size
 
         # Round to appropriate decimal places
         precision = int(round(-math.log10(step_size), 0))
         quantity = round(quantity, precision)
 
-        order_value = quantity * current_price
-        logger.info(f"Final adjusted quantity: {quantity}, Order value: {order_value} USDT")
-
-        if order_value < min_notional:
-            logger.warning(f"Cannot meet minimum notional value of {min_notional} USDT. Order value: {order_value} USDT")
-            return None
+        order_value_usdt = quantity * current_price
+        logger.info(f"Final adjusted quantity: {quantity} BTC, Order value: {order_value_usdt} USDT")
 
         return quantity
-    
+
     def adjust_price(self, symbol, price):
         symbol_info = self.get_symbol_info(symbol)
         if symbol_info is None:
@@ -143,24 +146,48 @@ class BinanceTrading:
         try:
             account_info = self.client.futures_account()
             for asset in account_info['assets']:
-                if asset['asset'] == 'USDT':  # We're always trading with USDT in this case
+                if asset['asset'] == 'USDT':  # We're always trading with USDT
                     return float(asset['availableBalance'])
         except BinanceAPIException as e:
             logger.error(f"Error fetching available balance: {e}")
             return None
     
+    def cancel_open_orders(self, symbol):
+        try:
+            open_orders = self.client.futures_get_open_orders(symbol=symbol)
+            for order in open_orders:
+                self.client.futures_cancel_order(symbol=symbol, orderId=order['orderId'])
+                logger.info(f"Cancelled order: {order['orderId']}")
+            return {"status": "success", "message": f"Cancelled {len(open_orders)} open orders"}
+        except BinanceAPIException as e:
+            logger.error(f"Error cancelling open orders: {e}")
+            return {"status": "failed", "reason": str(e)}
+
+    def get_position_amount(self, symbol):
+        try:
+            positions = self.client.futures_position_information(symbol=symbol)
+            for position in positions:
+                if float(position['positionAmt']) != 0:
+                    return float(position['positionAmt'])
+            return 0
+        except BinanceAPIException as e:
+            logger.error(f"Error getting position amount: {e}")
+            return None
+    
     def execute_position_action(self, action, symbol, amount, leverage, use_limit=True, wait_time=300):
         try:
-            max_leverage = self.get_max_leverage(symbol)
-            if max_leverage is None:
-                return {"status": "failed", "reason": "Unable to fetch max leverage"}
-            
-            if leverage > max_leverage:
-                logger.warning(f"Requested leverage {leverage} exceeds max leverage {max_leverage}. Using max leverage.")
-                leverage = max_leverage
+            # Skip leverage setting for closing positions
+            if action not in ['close_long', 'close_short']:
+                max_leverage = self.get_max_leverage(symbol)
+                if max_leverage is None:
+                    return {"status": "failed", "reason": "Unable to fetch max leverage"}
+                
+                if leverage > max_leverage:
+                    logger.warning(f"Requested leverage {leverage} exceeds max leverage {max_leverage}. Using max leverage.")
+                    leverage = max_leverage
 
-            self.client.futures_change_leverage(symbol=symbol, leverage=leverage)
-            logger.info(f"Leverage set to {leverage}x for {symbol}")
+                self.client.futures_change_leverage(symbol=symbol, leverage=leverage)
+                logger.info(f"Leverage set to {leverage}x for {symbol}")
 
             available_balance = self.get_available_balance(symbol)
             if available_balance is None:
@@ -170,34 +197,46 @@ class BinanceTrading:
             if current_price is None:
                 return {"status": "failed", "reason": "Unable to fetch current price"}
 
-            # Apply leverage to the amount for opening positions
+            # Check current position for closing actions
+            if action in ['close_long', 'close_short']:
+                current_position = self.get_position(symbol)
+                if current_position is None:
+                    return {"status": "failed", "reason": "No open position to close"}
+                
+                position_amt = abs(float(current_position['positionAmt']))
+                if amount > position_amt:
+                    logger.warning(f"Requested close amount {amount} BTC exceeds current position size {position_amt} BTC. Closing entire position.")
+                    amount = position_amt
+
+            # Apply leverage for opening positions
             if action in ['open_long', 'open_short']:
-                leveraged_amount = amount * leverage
+                leveraged_amount_usdt = amount * leverage
             else:
-                leveraged_amount = amount
+                leveraged_amount_usdt = amount * current_price  # Convert BTC to USDT for consistency
 
-            # Use the new adjust_quantity function
-            quantity = self.adjust_quantity(symbol, leveraged_amount, current_price, action)
+            # Adjust quantity
+            quantity_btc = self.adjust_quantity(symbol, leveraged_amount_usdt, current_price, action)
 
-            if quantity is None:
+            if quantity_btc is None:
                 return {"status": "failed", "reason": "Cannot meet minimum order requirements"}
 
-            # Check against max position size for opening positions
+            # Check max position size for opening positions
             if action in ['open_long', 'open_short']:
-                max_position_size = (available_balance * leverage) / current_price
-                if quantity > max_position_size:
-                    logger.warning(f"Adjusted quantity {quantity} exceeds max position size {max_position_size}. Limiting to max position size.")
-                    quantity = self.adjust_quantity(symbol, available_balance * leverage, current_price, action)
-                    if quantity is None:
+                max_position_size_btc = (available_balance * leverage) / current_price
+                if quantity_btc > max_position_size_btc:
+                    logger.warning(f"Adjusted quantity {quantity_btc} BTC exceeds max position size {max_position_size_btc} BTC. Limiting to max position size.")
+                    quantity_btc = self.adjust_quantity(symbol, available_balance * leverage, current_price, action)
+                    if quantity_btc is None:
                         return {"status": "failed", "reason": "Cannot meet minimum order requirements after limiting to max position size"}
 
             logger.info(f"Action: {action}")
             logger.info(f"Available balance: {available_balance} USDT")
             logger.info(f"Current price: {current_price} USDT")
             logger.info(f"Leverage: {leverage}x")
-            logger.info(f"Quantity: {quantity} {symbol.replace('USDT', '')}")
-            logger.info(f"Order value: {quantity * current_price} USDT")
+            logger.info(f"Quantity: {quantity_btc} BTC")
+            logger.info(f"Order value: {quantity_btc * current_price} USDT")
 
+            # Execute the order
             if use_limit:
                 if action in ['open_long', 'close_short']:
                     side = "BUY"
@@ -206,15 +245,15 @@ class BinanceTrading:
                     side = "SELL"
                     limit_price = self.adjust_price(symbol, current_price * 0.999)  # 0.1% lower
                 
-                return self.execute_limit_order_with_fallback(symbol, side, quantity, limit_price, wait_time)
+                return self.execute_limit_order_with_fallback(symbol, side, quantity_btc, limit_price, wait_time)
             else:
                 order = self.client.futures_create_order(
                     symbol=symbol,
                     side="BUY" if action in ['open_long', 'close_short'] else "SELL",
                     type="MARKET",
-                    quantity=quantity
+                    quantity=quantity_btc
                 )
-                logger.info(f"{action.capitalize()} executed successfully: {quantity} {symbol.replace('USDT', '')}")
+                logger.info(f"{action.capitalize()} executed successfully: {quantity_btc} BTC")
                 return {"status": "success", "order": order}
 
         except BinanceAPIException as e:
