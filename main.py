@@ -25,6 +25,7 @@ openai_api_key = os.getenv("OPENAI_API_KEY")
 binance_trader = BinanceTrading(binance_api_key, binance_api_secret)
 ai_strategy = AITradingStrategy(openai_api_key)
 
+
 def run_monitor():
     db_monitor.main()
     
@@ -34,7 +35,7 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS trades
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   timestamp TEXT,
-                  decision TEXT,
+                  action TEXT,
                   percentage INTEGER,
                   reason TEXT,
                   usdt_balance REAL,
@@ -57,6 +58,8 @@ def update_db_schema():
     c.execute("PRAGMA table_info(trades)")
     columns = [column[1] for column in c.fetchall()]
 
+    if 'action' not in columns:
+        c.execute("ALTER TABLE trades ADD COLUMN action TEXT")
     if 'order_status' not in columns:
         c.execute("ALTER TABLE trades ADD COLUMN order_status TEXT")
     if 'order_reason' not in columns:
@@ -65,7 +68,7 @@ def update_db_schema():
     conn.commit()
     conn.close()
 
-def log_trade(conn, decision, percentage, reason, usdt_balance, btc_price, reflection, order_result):
+def log_trade(conn, action, percentage, reason, usdt_balance, btc_price, reflection, order_result):
     c = conn.cursor()
     timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
     
@@ -73,9 +76,9 @@ def log_trade(conn, decision, percentage, reason, usdt_balance, btc_price, refle
     order_reason = order_result.get("reason", "")
     
     c.execute("""INSERT INTO trades 
-                 (timestamp, decision, percentage, reason, usdt_balance, btc_price, reflection, order_status, order_reason) 
+                 (timestamp, action, percentage, reason, usdt_balance, btc_price, reflection, order_status, order_reason) 
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-              (timestamp, decision, percentage, reason, usdt_balance, btc_price, reflection, order_status, order_reason))
+              (timestamp, action, percentage, reason, usdt_balance, btc_price, reflection, order_status, order_reason))
     conn.commit()
 
 def get_recent_trades(conn, days=7):
@@ -90,12 +93,11 @@ def execute_trade(binance_trader, symbol, leverage, result, current_position, us
         logger.error("USDT balance or BTC price is None.")
         return {"status": "failed", "reason": "Invalid balance or price data"}
     
-    if result.decision in ["buy", "sell"]:
-        if current_position and float(current_position["positionAmt"]) != 0:
-            position_size = abs(float(current_position["positionAmt"]))
-            trade_quantity = position_size * (result.percentage / 100)
-        else:
-            trade_quantity = (usdt_balance * 0.95 * (result.percentage / 100)) / btc_price  # 95% 사용
+    if result.action == "hold":
+        return {"status": "hold", "reason": "AI decided to hold current position"}
+    
+    if result.action in ["open_long", "close_short", "open_short", "close_long"]:
+        trade_quantity = (usdt_balance * 0.95 * (result.percentage / 100)) / btc_price  # Using 95% of available balance
 
         max_retries = 3
         retry_count = 0
@@ -104,7 +106,7 @@ def execute_trade(binance_trader, symbol, leverage, result, current_position, us
             try:
                 results = []
 
-                if result.decision == "buy":
+                if result.action == "open_long" or result.action == "close_short":
                     if current_position and float(current_position["positionAmt"]) < 0:
                         # Close short position if exists
                         close_result = binance_trader.close_short_position(symbol, trade_quantity, use_limit, wait_time)
@@ -145,7 +147,7 @@ def execute_trade(binance_trader, symbol, leverage, result, current_position, us
                             else:
                                 logger.warning(f"Failed to set stop loss: {stop_loss_result.get('reason')}. Continuing without stop loss.")
 
-                elif result.decision == "sell":
+                elif result.action == "open_short" or result.action == "close_long":
                     if current_position and float(current_position["positionAmt"]) > 0:
                         # Close long position if exists
                         close_result = binance_trader.close_long_position(symbol, trade_quantity, use_limit, wait_time)
@@ -216,9 +218,8 @@ def execute_trade(binance_trader, symbol, leverage, result, current_position, us
             except Exception as e:
                 logger.error(f"Unexpected error: {e}")
                 return {"status": "failed", "reason": str(e)}
-
-    else:  # hold
-        return {"status": "hold", "reason": "No trade executed"}
+    else:
+        return {"status": "failed", "reason": f"Invalid action: {result.action}"}
     
 def ai_trading():
     usdt_balance = binance_trader.get_futures_account_balance()
@@ -255,43 +256,26 @@ def ai_trading():
             
             result = ai_strategy.get_ai_trading_decision(usdt_balance, btc_price, df_daily, df_hourly, fear_greed_index, current_position)
             if result is None:
-                logger.error("Failed to get AI trading decision.")
+                logger.error("Failed to get AI trading actions.")
                 return
             
-            logger.info(f"AI Decision: {result.decision.upper()}")
-            logger.info(f"Decision Reason: {result.reason}")
+            logger.info(f"AI Action: {result.action.upper()}")
+            logger.info(f"Action Reason: {result.reason}")
 
             leverage = 10.0
             margin_type = "ISOLATED"
             binance_trader.set_leverage(symbol, leverage)
             binance_trader.set_margin_type(symbol, margin_type)
 
-            # Calculate the trade amount considering the leverage
-            # 여기서 trade_amount는 레버리지를 고려하지 않은 순수한 USDT 금액
-            trade_amount = (usdt_balance * result.percentage) / 100
+            order_result = execute_trade(binance_trader, symbol, leverage, result, current_position, usdt_balance, btc_price)
 
-            if result.decision in ["buy", "sell"]:
-                if result.decision == "buy":
-                    order_result = binance_trader.open_long_position(symbol, trade_amount, leverage, use_limit=True, wait_time=300)
-                else:  # sell
-                    order_result = binance_trader.open_short_position(symbol, trade_amount, leverage, use_limit=True, wait_time=300)
-                
-                if order_result["status"] == "failed" and "Insufficient balance" in order_result["reason"]:
-                    logger.warning(f"Insufficient balance for {result.decision} order. Attempting with entire available balance.")
-                    if result.decision == "buy":
-                        order_result = binance_trader.open_long_position(symbol, usdt_balance, leverage, use_limit=True, wait_time=300)
-                    else:  # sell
-                        order_result = binance_trader.open_short_position(symbol, usdt_balance, leverage, use_limit=True, wait_time=300)
-            else:  # hold
-                order_result = {"status": "hold", "reason": "AI decided to hold"}
-
-            log_trade(conn, result.decision, result.percentage, result.reason, 
+            log_trade(conn, result.action, result.percentage, result.reason, 
                       usdt_balance, btc_price, reflection, order_result)
 
             if order_result["status"] != "success":
-                logger.error(f"{result.decision.capitalize()} order failed: {order_result}")
+                logger.error(f"{result.action.capitalize()} order failed: {order_result}")
             else:
-                logger.info(f"{result.decision.capitalize()} order executed successfully: {order_result}")
+                logger.info(f"{result.action.capitalize()} order executed successfully: {order_result}")
 
     except sqlite3.Error as e:
         logger.error(f"Database connection error: {e}")

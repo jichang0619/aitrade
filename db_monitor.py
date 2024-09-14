@@ -5,7 +5,6 @@ from dotenv import load_dotenv
 import asyncio
 from aiogram import Bot
 
-
 # Load environment variables
 load_dotenv()
 
@@ -29,7 +28,13 @@ def fetch_last_trade(db_path):
 async def send_trade_update(bot):
     trade = fetch_last_trade(DB_PATH)
     if trade:
-        trade_message = f"Last trade attempt:\nTrade Num: {trade[0]}\nTime: {trade[1]}\nDecision: {trade[2]}\nPercentage: {trade[3]}\nStatus: {trade[8]}\nReason: {trade[9]}"
+        trade_message = f"""Last trade attempt:
+Trade Num: {trade[0]}
+Time: {trade[1]}
+Action: {trade[2]}
+Percentage: {trade[3]}
+Status: {trade[8]}
+Reason: {trade[9]}"""
         try:
             html_message = trade_message.replace('-', '&#45;')
             await bot.send_message(chat_id=CHAT_ID, text=html_message, parse_mode="HTML")

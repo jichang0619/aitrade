@@ -10,7 +10,7 @@ import re
 logger = logging.getLogger(__name__)
 
 class TradingDecision(BaseModel):
-    decision: str
+    action: str
     percentage: int
     reason: str
 
@@ -41,16 +41,23 @@ class AITradingStrategy:
             2. Proficiency in interpreting market sentiment indicators like the Fear & Greed Index
             3. Ability to analyze both short-term (hourly) and medium-term (daily) market trends
             4. Strong risk management skills, but with a tendency to take calculated risks for higher returns
-            5. Quick decision-making capabilities in volatile market conditions
+            5. Quick action-making capabilities in volatile market conditions
 
-            Your goal is to maximize profits while managing risk. Don't be afraid to recommend larger position sizes or quick position changes if the market conditions warrant it. However, always provide a clear rationale for your decisions.
+            Your goal is to maximize profits while managing risk. Don't be afraid to recommend larger position sizes or quick position changes if the market conditions warrant it. However, always provide a clear rationale for your actions.
 
             Respond with a JSON object containing the following fields:
             {
-                "decision": "buy" or "sell" or "hold",
+                "action": "open_long" or "close_long" or "open_short" or "close_short" or "hold",
                 "percentage": integer between 1 and 100,
-                "reason": "detailed explanation for the decision"
+                "reason": "detailed explanation for the action"
             }
+            
+            Note:
+            - "open_long": Enter a new long position or increase an existing long position
+            - "close_long": Exit an existing long position (partially or fully)
+            - "open_short": Enter a new short position or increase an existing short position
+            - "close_short": Exit an existing short position (partially or fully)
+            - "hold": Make no changes to the current position
             """
 
             position_info = self.get_position_return(current_position, btc_price) if current_position else None
@@ -73,41 +80,36 @@ class AITradingStrategy:
             Hourly OHLCV with indicators (24 hours): {df_hourly.to_json()}
             Fear and Greed Index: {json.dumps(fear_greed_index)}
 
-            Based on this data, provide a trading decision (buy, sell, or hold) along with the percentage of the balance to use (1-100) and a detailed reason for your decision. Consider the current market trends, technical indicators, and overall market sentiment. If there's an existing position, factor in whether to hold, increase, decrease, or close it based on its current return and market outlook.
+            Based on this data, provide a trading action (open_long, close_long, open_short, close_short, or hold) along with the percentage of the balance to use (1-100) and a detailed reason for your action. Consider the current market trends, technical indicators, and overall market sentiment. If there's an existing position, factor in whether to hold, increase, decrease, or close it based on its current return and market outlook.
             """
             
             response = self.openai_client.chat.completions.create(
-                model="gpt-4-0613",
+                model="gpt-4-1106-preview",
                 messages=[
                     {"role": "system", "content": system_content},
                     {"role": "user", "content": user_content}
-                ]
+                ],
+                response_format={ "type": "json_object" }
             )
 
-            # Extract JSON from the response
-            content = response.choices[0].message.content
-            json_match = re.search(r'\{.*\}', content, re.DOTALL)
-            if json_match:
-                result = json.loads(json_match.group())
-            else:
-                raise ValueError("No JSON object found in the response")
+            result = json.loads(response.choices[0].message.content)
 
             # Validate the result
-            if not isinstance(result, dict) or not all(key in result for key in ["decision", "percentage", "reason"]):
+            if not isinstance(result, dict) or not all(key in result for key in ["action", "percentage", "reason"]):
                 raise ValueError(f"Unexpected response format: {result}")
 
-            return TradingDecision(**result)
+            return TradingDecision(action=result["action"], percentage=result["percentage"], reason=result["reason"])
         except json.JSONDecodeError as e:
             logger.error(f"JSON parsing error: {e}")
-            logger.error(f"Raw response content: {content}")
+            logger.error(f"Raw response content: {response.choices[0].message.content}")
             return None
         except ValueError as e:
             logger.error(f"Value error: {e}")
-            logger.error(f"Raw response content: {content}")
+            logger.error(f"Raw response content: {response.choices[0].message.content}")
             return None
         except Exception as e:
-            logger.error(f"Error getting AI trading decision: {e}")
-            logger.error(f"Raw response content: {content}")
+            logger.error(f"Error getting AI trading Action : {e}")
+            logger.error(f"Raw response content: {response.choices[0].message.content}")
             return None
 
     def get_position_return(self, current_position, current_price):
@@ -157,7 +159,8 @@ class AITradingStrategy:
             trades_summary = f"""
             Total trades: {len(trades_df)}
             Average trade size: {trades_df['percentage'].mean():.2f}%
-            Most common decision: {trades_df['decision'].mode().values[0]}
+            Most common action: {trades_df['action'].mode().values[0]}
+            Most recent reflection : {trades_df['reflection'].iloc[0]}
             """
 
         # Summarize current market data
@@ -172,7 +175,7 @@ class AITradingStrategy:
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are an AI trading assistant tasked with analyzing recent trading performance and current market conditions to generate insights and improvements for future trading decisions."
+                        "content": "You are an AI trading assistant tasked with analyzing recent trading performance and current market conditions to generate insights and improvements for future trading actions."
                     },
                     {
                         "role": "user",
@@ -186,15 +189,16 @@ class AITradingStrategy:
                         Overall performance in the last 7 days: {performance:.2f}%
                         
                         Please analyze this data and provide:
-                        1. A brief reflection on the recent trading decisions
+                        1. A brief reflection on the recent trading actions
                         2. Insights on what worked well and what didn't
-                        3. Suggestions for improvement in future trading decisions
+                        3. Suggestions for improvement in future trading actions
                         4. Any patterns or trends you notice in the market data
                         
                         Limit your response to 250 words or less.
                         """
                     }
-                ]
+                ],
+                max_tokens=800
             )
 
             return response.choices[0].message.content
