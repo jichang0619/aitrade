@@ -27,9 +27,9 @@ class BinanceTrading:
                 logger.error(f"Error fetching symbol information: {e}")
                 return None
         return self.symbol_info[symbol]
-
-    def adjust_quantity(self, symbol, desired_amount, current_price):
-        logger.info(f"Adjusting quantity for {symbol}. Desired amount: {desired_amount} USDT, Current price: {current_price}")
+    
+    def adjust_quantity(self, symbol, amount, current_price, action):
+        logger.info(f"Adjusting quantity for {symbol}. Amount: {amount}, Current price: {current_price}, Action: {action}")
         
         symbol_info = self.get_symbol_info(symbol)
         if symbol_info is None:
@@ -49,18 +49,19 @@ class BinanceTrading:
         
         logger.info(f"Step size: {step_size}, Minimum quantity: {min_qty}, Minimum notional: {min_notional}")
 
-        # Calculate initial quantity
-        quantity = desired_amount / current_price
+        # Calculate quantity based on action type
+        if action in ['open_long', 'open_short']:
+            # For opening positions, use USDT amount (leverage already applied)
+            quantity = amount / current_price
+        else:  # close_long or close_short
+            # For closing positions, amount is already in the asset (e.g., BTC)
+            quantity = amount
 
         # Adjust quantity to step size
         quantity = math.floor(quantity / step_size) * step_size
 
-        # Ensure the quantity meets the minimum notional value
-        while quantity * current_price < min_notional:
-            quantity += step_size
-
-        # Ensure the quantity is not less than the minimum quantity
-        quantity = max(quantity, min_qty)
+        # Ensure the quantity meets the minimum notional value and is not less than the minimum quantity
+        quantity = max(quantity, min_qty, min_notional / current_price)
 
         # Round to appropriate decimal places
         precision = int(round(-math.log10(step_size), 0))
@@ -74,7 +75,7 @@ class BinanceTrading:
             return None
 
         return quantity
-
+    
     def adjust_price(self, symbol, price):
         symbol_info = self.get_symbol_info(symbol)
         if symbol_info is None:
@@ -94,18 +95,8 @@ class BinanceTrading:
             return 0.0
 
     def set_stop_loss(self, symbol, side, quantity, entry_price, risk_percentage=2.5):
-        """
-        Set a stop loss order for a given position.
-        
-        :param symbol: Trading pair symbol (e.g., 'BTCUSDT')
-        :param side: 'BUY' for long positions, 'SELL' for short positions
-        :param quantity: Position size
-        :param entry_price: Entry price of the position
-        :param risk_percentage: Percentage of entry price to set as stop loss (default 2%)
-        :return: Result of the stop loss order placement
-        """
         try:
-            symbol_info = self.client.get_symbol_info(symbol)
+            symbol_info = self.get_symbol_info(symbol)
             price_filter = next(filter(lambda f: f['filterType'] == 'PRICE_FILTER', symbol_info['filters']))
             tick_size = float(price_filter['tickSize'])
 
@@ -118,6 +109,9 @@ class BinanceTrading:
             
             # Round the stop price to the nearest valid price
             stop_price = round(stop_price / tick_size) * tick_size
+            
+            # Adjust quantity to meet step size requirements
+            quantity = self.adjust_quantity(symbol, quantity * entry_price, entry_price)
             
             stop_loss_order = self.client.futures_create_order(
                 symbol=symbol,
@@ -165,6 +159,9 @@ class BinanceTrading:
                 logger.warning(f"Requested leverage {leverage} exceeds max leverage {max_leverage}. Using max leverage.")
                 leverage = max_leverage
 
+            self.client.futures_change_leverage(symbol=symbol, leverage=leverage)
+            logger.info(f"Leverage set to {leverage}x for {symbol}")
+
             available_balance = self.get_available_balance(symbol)
             if available_balance is None:
                 return {"status": "failed", "reason": "Unable to fetch available balance"}
@@ -173,37 +170,33 @@ class BinanceTrading:
             if current_price is None:
                 return {"status": "failed", "reason": "Unable to fetch current price"}
 
-            symbol_info = self.get_symbol_info(symbol)
-            min_notional = float(next(filter(lambda x: x['filterType'] == 'MIN_NOTIONAL', symbol_info['filters']))['notional'])
-            
-            # leverage를 고려한 주문 금액 계산
-            leveraged_amount = amount * leverage
+            # Apply leverage to the amount for opening positions
+            if action in ['open_long', 'open_short']:
+                leveraged_amount = amount * leverage
+            else:
+                leveraged_amount = amount
 
-            # 수량 조정
-            quantity = self.adjust_quantity(symbol, leveraged_amount, current_price)
+            # Use the new adjust_quantity function
+            quantity = self.adjust_quantity(symbol, leveraged_amount, current_price, action)
 
             if quantity is None:
                 return {"status": "failed", "reason": "Cannot meet minimum order requirements"}
 
-            # 최대 포지션 크기 확인
-            max_position_size = (available_balance * leverage) / current_price
-            if quantity > max_position_size:
-                logger.warning(f"Adjusted quantity {quantity} exceeds max position size {max_position_size}. Limiting to max position size.")
-                quantity = max_position_size
-                # 다시 한 번 adjust_quantity를 호출하여 step size에 맞추어 조정
-                quantity = self.adjust_quantity(symbol, quantity * current_price, current_price)
-                if quantity is None:
-                    return {"status": "failed", "reason": "Cannot meet minimum order requirements after limiting to max position size"}
+            # Check against max position size for opening positions
+            if action in ['open_long', 'open_short']:
+                max_position_size = (available_balance * leverage) / current_price
+                if quantity > max_position_size:
+                    logger.warning(f"Adjusted quantity {quantity} exceeds max position size {max_position_size}. Limiting to max position size.")
+                    quantity = self.adjust_quantity(symbol, available_balance * leverage, current_price, action)
+                    if quantity is None:
+                        return {"status": "failed", "reason": "Cannot meet minimum order requirements after limiting to max position size"}
 
+            logger.info(f"Action: {action}")
             logger.info(f"Available balance: {available_balance} USDT")
             logger.info(f"Current price: {current_price} USDT")
             logger.info(f"Leverage: {leverage}x")
-            logger.info(f"Max position size: {max_position_size} {symbol}")
-            logger.info(f"Final adjusted quantity: {quantity} {symbol}")
-            logger.info(f"Order value (with leverage): {quantity * current_price} USDT")
-
-            if quantity * current_price < min_notional:
-                return {"status": "failed", "reason": f"Insufficient balance. Minimum order value is {min_notional} USDT."}
+            logger.info(f"Quantity: {quantity} {symbol.replace('USDT', '')}")
+            logger.info(f"Order value: {quantity * current_price} USDT")
 
             if use_limit:
                 if action in ['open_long', 'close_short']:
@@ -221,7 +214,7 @@ class BinanceTrading:
                     type="MARKET",
                     quantity=quantity
                 )
-                logger.info(f"{action.capitalize()} executed successfully: {quantity} {symbol}")
+                logger.info(f"{action.capitalize()} executed successfully: {quantity} {symbol.replace('USDT', '')}")
                 return {"status": "success", "order": order}
 
         except BinanceAPIException as e:
@@ -230,7 +223,7 @@ class BinanceTrading:
         except Exception as e:
             logger.error(f"Unexpected error in execute_position_action: {e}")
             return {"status": "failed", "reason": str(e)}
-            
+    
     def open_long_position(self, symbol, amount, leverage, use_limit=True, wait_time=300):
         return self.execute_position_action('open_long', symbol, amount, leverage, use_limit, wait_time)
 

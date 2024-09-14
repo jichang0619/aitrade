@@ -94,11 +94,27 @@ def execute_trade(binance_trader, symbol, leverage, result, current_position, us
         return {"status": "failed", "reason": "Invalid balance or price data"}
     
     if result.action == "hold":
-        return {"status": "hold", "reason": "AI decided to hold current position"}
+        return {"status": "success", "reason": "AI decided to hold current position"}
     
     if result.action in ["open_long", "close_short", "open_short", "close_long"]:
-        trade_quantity = (usdt_balance * 0.95 * (result.percentage / 100)) / btc_price  # Using 95% of available balance
+        
+        if result.action in ["open_long", "open_short"]:
+            # For opening positions, calculate quantity in BTC based on USDT amount
+            usdt_amount = usdt_balance * 0.95 * (result.percentage / 100)  # Using 95% of available balance
+            ## raw_quantity = usdt_amount / btc_price
+            trade_quantity = usdt_amount
+            
+        else:  # close_long or close_short
+            # For closing positions, use the current position amount
+            if current_position:
+                trade_quantity = abs(float(current_position["positionAmt"]))
+            else:
+                usdt_amount = usdt_balance * 0.95 * (result.percentage / 100) 
+                trade_quantity = usdt_amount
+                #logger.error("No current position to close.")
+                #return {"status": "failed", "reason": "No current position to close"}
 
+        
         max_retries = 3
         retry_count = 0
 
