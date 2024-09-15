@@ -28,40 +28,40 @@ class BinanceTrading:
                 return None
         return self.symbol_info[symbol]
 
-    def adjust_quantity_usdt(self, symbol, amount_usdt, current_price, action, leverage):
-        logger.info(f"Adjusting USDT quantity for {symbol}. Amount USDT: {amount_usdt}, Current Coin price: {current_price}, Action: {action}, Leverage: {leverage}")
+    # def adjust_quantity_usdt(self, symbol, amount_usdt, current_price, action, leverage):
+    #     logger.info(f"Adjusting USDT quantity for {symbol}. Amount USDT: {amount_usdt}, Current Coin price: {current_price}, Action: {action}, Leverage: {leverage}")
         
-        symbol_info = self.get_symbol_info(symbol)
-        if symbol_info is None:
-            logger.warning(f"Symbol info not found for {symbol}. Returning None.")
-            return None, None
+    #     symbol_info = self.get_symbol_info(symbol)
+    #     if symbol_info is None:
+    #         logger.warning(f"Symbol info not found for {symbol}. Returning None.")
+    #         return None, None
 
-        min_notional_filter = next((f for f in symbol_info['filters'] if f['filterType'] == 'MIN_NOTIONAL'), None)
+    #     min_notional_filter = next((f for f in symbol_info['filters'] if f['filterType'] == 'MIN_NOTIONAL'), None)
 
-        if min_notional_filter is None:
-            logger.warning(f"MIN_NOTIONAL filter not found for {symbol}. Returning None.")
-            return None, None
+    #     if min_notional_filter is None:
+    #         logger.warning(f"MIN_NOTIONAL filter not found for {symbol}. Returning None.")
+    #         return None, None
 
-        min_notional = float(min_notional_filter['notional'])
+    #     min_notional = float(min_notional_filter['notional'])
         
-        logger.info(f"Minimum notional: {min_notional}")
+    #     logger.info(f"Minimum notional: {min_notional}")
 
-        # Apply leverage to the USDT amount
-        leveraged_amount_usdt = amount_usdt * leverage
+    #     # Apply leverage to the USDT amount
+    #     leveraged_amount_usdt = amount_usdt * leverage
 
-        # Adjust the USDT amount to be an integer
-        adjusted_amount_usdt = math.floor(leveraged_amount_usdt)
+    #     # Adjust the USDT amount to be an integer
+    #     adjusted_amount_usdt = math.floor(leveraged_amount_usdt)
 
-        # Ensure the amount meets the minimum notional value
-        if adjusted_amount_usdt < min_notional:
-            adjusted_amount_usdt = math.ceil(min_notional)
+    #     # Ensure the amount meets the minimum notional value
+    #     if adjusted_amount_usdt < min_notional:
+    #         adjusted_amount_usdt = math.ceil(min_notional)
 
-        # Calculate the quantity in the base asset (e.g., BTC)
-        quantity = adjusted_amount_usdt / current_price
+    #     # Calculate the quantity in the base asset (e.g., BTC)
+    #     quantity = adjusted_amount_usdt / current_price
 
-        logger.info(f"Final adjusted USDT amount: {adjusted_amount_usdt} USDT, Equivalent quantity: {quantity} {symbol.replace('USDT', '')}")
+    #     logger.info(f"Final adjusted USDT amount: {adjusted_amount_usdt} USDT, Equivalent quantity: {quantity} {symbol.replace('USDT', '')}")
 
-        return adjusted_amount_usdt, quantity
+    #     return adjusted_amount_usdt, quantity
     
     def adjust_price(self, symbol, price):
         symbol_info = self.get_symbol_info(symbol)
@@ -72,6 +72,7 @@ class BinanceTrading:
         precision = int(round(-math.log(tick_size, 10), 0))
         return round(price, precision)
 
+    # USDT BALANCE 
     def get_futures_account_balance(self):
         try:
             account_info = self.client.futures_account()
@@ -177,11 +178,10 @@ class BinanceTrading:
                 return {"status": "failed", "reason": "Unable to fetch current price"}
 
             if action in ['open_long', 'open_short']:
-                adjusted_amount_usdt = amount * (percentage / 100)
+                adjusted_amount_usdt = math.floor(amount * leverage * (percentage / 100))
                 logger.info(f"Action: {action}")
-                logger.info(f"Amount USDT: {amount}")
                 logger.info(f"AI Percentage: {percentage}%")
-                logger.info(f"Adjusted Amount USDT: {adjusted_amount_usdt}")
+                logger.info(f"Adjusted Amount Order USDT: {adjusted_amount_usdt}")
                 logger.info(f"Current price: {current_price} USDT")
                 logger.info(f"Leverage: {leverage}x")
 
@@ -213,40 +213,27 @@ class BinanceTrading:
                 if current_position is None or float(current_position['positionAmt']) == 0:
                     return {"status": "failed", "reason": "No open position to close"}
 
-                position_amount_btc = abs(float(current_position['positionAmt']))
-                position_value_usdt = position_amount_btc * current_price
-                close_amount_usdt = position_value_usdt * (percentage / 100)
+                position_amount = abs(float(current_position['positionAmt']))
+                position_value_usdt = position_amount * current_price
+                close_position_amount = position_amount * (percentage / 100)
 
                 logger.info(f"Action: {action}")
-                logger.info(f"Current position amount: {position_amount_btc} BTC")
+                logger.info(f"Current position amount: {position_amount} BTC")
                 logger.info(f"Current position value: {position_value_usdt} USDT")
                 logger.info(f"AI Percentage to close: {percentage}%")
-                logger.info(f"Amount to close: {close_amount_usdt} USDT")
+                logger.info(f"Amount to close: {close_position_amount} BTC")
                 logger.info(f"Current price: {current_price} USDT")
 
                 side = "SELL" if float(current_position['positionAmt']) > 0 else "BUY"
-
-                if use_limit:
-                    limit_price = self.adjust_price(symbol, current_price * (0.999 if side == "SELL" else 1.001))
-                    order = self.client.futures_create_order(
-                        symbol=symbol,
-                        side=side,
-                        type='LIMIT',
-                        timeInForce='GTC',
-                        price=limit_price,
-                        quoteOrderQty=close_amount_usdt
-                    )
-                    return self.handle_limit_order(order, symbol, side, close_amount_usdt, wait_time, is_close=True)
-                else:
-                    order = self.client.futures_create_order(
-                        symbol=symbol,
-                        side=side,
-                        type='MARKET',
-                        quoteOrderQty=close_amount_usdt
-                    )
-                    logger.info(f"{action.capitalize()} executed successfully: {close_amount_usdt} USDT")
-                    return {"status": "success", "order": order}
-
+                
+                order = self.client.futures_create_order(
+                    symbol=symbol,
+                    side=side,
+                    type='MARKET',
+                    quantity=close_position_amount
+                )
+                logger.info(f"{action.capitalize()} executed successfully: {close_position_amount} BTC")
+                return {"status": "success", "order": order}
             else:
                 return {"status": "failed", "reason": f"Invalid action: {action}"}
 
@@ -257,17 +244,17 @@ class BinanceTrading:
             logger.error(f"Unexpected error in execute_position_action: {e}")
             return {"status": "failed", "reason": str(e)}
 
-    def open_long_position(self, symbol, amount, leverage, percentage, use_limit=True, wait_time=300):
-        return self.execute_position_action('open_long', symbol, amount, leverage, percentage, use_limit, wait_time)
+    def open_long_position(self, symbol, amount_usdt, leverage, percentage, use_limit=True, wait_time=300):
+        return self.execute_position_action('open_long', symbol, amount_usdt, leverage, percentage, use_limit, wait_time)
 
-    def open_short_position(self, symbol, amount, leverage, percentage, use_limit=True, wait_time=300):
-        return self.execute_position_action('open_short', symbol, amount, leverage, percentage, use_limit, wait_time)
+    def open_short_position(self, symbol, amount_usdt, leverage, percentage, use_limit=True, wait_time=300):
+        return self.execute_position_action('open_short', symbol, amount_usdt, leverage, percentage, use_limit, wait_time)
 
-    def close_long_position(self, symbol, amount, percentage, use_limit=True, wait_time=300):
-        return self.execute_position_action('close_long', symbol, amount, 1, percentage, use_limit, wait_time)
+    def close_long_position(self, symbol, position_size, percentage, use_limit=True, wait_time=300):
+        return self.execute_position_action('close_long', symbol, position_size, 1, percentage, use_limit, wait_time)
 
-    def close_short_position(self, symbol, amount, percentage, use_limit=True, wait_time=300):
-        return self.execute_position_action('close_short', symbol, amount, 1, percentage, use_limit, wait_time)
+    def close_short_position(self, symbol, position_size, percentage, use_limit=True, wait_time=300):
+        return self.execute_position_action('close_short', symbol, position_size, 1, percentage, use_limit, wait_time)
     
     def handle_limit_order(self, order, symbol, side, amount, wait_time=300, is_close=False):
         order_id = order['orderId']
@@ -310,7 +297,8 @@ class BinanceTrading:
         )
         return {"status": "timeout_full_market", "market_order": market_order}
     
-    def get_binance_futures_price(self, symbol='BTCUSDT'):
+    # Get Symbol Price
+    def get_binance_futures_price(self, symbol):
         try:
             price = self.client.futures_symbol_ticker(symbol=symbol)['price']
             return float(price)
@@ -333,7 +321,6 @@ class BinanceTrading:
         if leverage is None:
             logger.error("Leverage value is None.")
             return
-
         try:
             response = self.client.futures_change_leverage(symbol=symbol, leverage=int(leverage))
             logger.info(f"Leverage set to {leverage} for {symbol}: {response}")

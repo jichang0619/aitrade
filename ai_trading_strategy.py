@@ -171,7 +171,7 @@ class AITradingStrategy:
 
         try:
             response = self.openai_client.chat.completions.create(
-                model="gpt-4-0613",
+                model="gpt-4-1106-preview",
                 messages=[
                     {
                         "role": "system",

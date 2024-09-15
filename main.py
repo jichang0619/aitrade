@@ -88,13 +88,10 @@ def get_recent_trades(conn, days=7):
     columns = [column[0] for column in c.description]
     return pd.DataFrame.from_records(data=c.fetchall(), columns=columns)
     
-def execute_trade(binance_trader, symbol, leverage, result, current_position, usdt_balance, btc_price, use_limit=True, wait_time=300):
+def trade_main(binance_trader, symbol, leverage, gpt_result, current_position, usdt_balance, btc_price, use_limit=True, wait_time=300):
     if usdt_balance is None or btc_price is None:
         logger.error("USDT balance or BTC price is None.")
         return {"status": "failed", "reason": "Invalid balance or price data"}
-    
-    if result.action == "hold":
-        return {"status": "success", "reason": "AI decided to hold current position"}
     
     # Cancel all open orders including stop loss
     cancel_result = binance_trader.cancel_open_orders(symbol)
@@ -103,36 +100,42 @@ def execute_trade(binance_trader, symbol, leverage, result, current_position, us
         return cancel_result
 
     try:
-        if result.action in ["open_long", "open_short"]:
-            if result.action == "open_long":
-                order_result = binance_trader.open_long_position(symbol, usdt_balance, leverage, result.percentage, use_limit, wait_time)
+        if gpt_result.action == "hold":
+            return {"status": "success", "reason": "AI decided to hold current position"}
+        
+        elif gpt_result.action in ["open_long", "open_short"]:
+            if gpt_result.action == "open_long":
+                order_result = binance_trader.open_long_position(symbol, usdt_balance, leverage, gpt_result.percentage, use_limit, wait_time)
             else:
-                order_result = binance_trader.open_short_position(symbol, usdt_balance, leverage, result.percentage, use_limit, wait_time)
-        elif result.action in ["close_long", "close_short"]:
+                order_result = binance_trader.open_short_position(symbol, usdt_balance, leverage, gpt_result.percentage, use_limit, wait_time)
+        
+        elif gpt_result.action in ["close_long", "close_short"]:
+            # close position 이 제대로 나오는지... gpt 가 현재 포지션이 있을때만 나와야함
             if current_position is None:
                 return {"status": "failed", "reason": "No position to close"}
-            position_size = abs(float(current_position['positionAmt']))
-            if result.action == "close_long":
-                order_result = binance_trader.close_long_position(symbol, position_size, result.percentage, use_limit, wait_time)
             else:
-                order_result = binance_trader.close_short_position(symbol, position_size, result.percentage, use_limit, wait_time)
+                position_size = abs(float(current_position['positionAmt']))
+                if gpt_result.action == "close_long":
+                    order_result = binance_trader.close_long_position(symbol, position_size, gpt_result.percentage, use_limit, wait_time)
+                else:
+                    order_result = binance_trader.close_short_position(symbol, position_size, gpt_result.percentage, use_limit, wait_time)
         else:
-            return {"status": "failed", "reason": f"Invalid action: {result.action}"}
+            return {"status": "failed", "reason": f"Invalid action: {gpt_result.action}"}
 
         if order_result["status"] == "success":
-            logger.info(f"{result.action.capitalize()} order executed successfully: {order_result}")
+            logger.info(f"{gpt_result.action.capitalize()} order executed successfully: {order_result}")
             
             # Set stop loss for opening positions
-            if result.action in ["open_long", "open_short"]:
+            if gpt_result.action in ["open_long", "open_short"]:
                 entry_price = float(order_result["order"]["avgPrice"])
                 executed_qty = abs(float(order_result["order"]["executedQty"]))
-                stop_loss_result = binance_trader.set_stop_loss(symbol, "BUY" if result.action == "open_long" else "SELL", executed_qty, entry_price)
+                stop_loss_result = binance_trader.set_stop_loss(symbol, "BUY" if gpt_result.action == "open_long" else "SELL", executed_qty, entry_price)
                 if stop_loss_result["status"] == "success":
                     logger.info(f"Stop loss set successfully: {stop_loss_result}")
                 else:
                     logger.warning(f"Failed to set stop loss: {stop_loss_result['reason']}. Continuing without stop loss.")
         else:
-            logger.error(f"{result.action.capitalize()} order failed: {order_result}")
+            logger.error(f"{gpt_result.action.capitalize()} order failed: {order_result}")
 
         return order_result
 
@@ -141,8 +144,9 @@ def execute_trade(binance_trader, symbol, leverage, result, current_position, us
         return {"status": "failed", "reason": str(e)}    
 
 def ai_trading():
+    symbol = "BTCUSDT"
     usdt_balance = binance_trader.get_futures_account_balance()
-    btc_price = binance_trader.get_binance_futures_price()
+    btc_price = binance_trader.get_binance_futures_price(symbol)
 
     if usdt_balance is None or btc_price is None:
         logger.error("Unable to retrieve balance or price data.")
@@ -150,10 +154,9 @@ def ai_trading():
     
     logger.info(f"Available USDT Balance: {usdt_balance}, BTC Price: {btc_price}")
     
-    df_daily = binance_trader.get_ohlcv("BTCUSDT", interval="1d", limit=30)
+    df_daily = binance_trader.get_ohlcv(symbol, interval="1d", limit=30)
     df_daily = ai_strategy.add_indicators(df_daily)
-    
-    df_hourly = binance_trader.get_ohlcv("BTCUSDT", interval="1h", limit=24)
+    df_hourly = binance_trader.get_ohlcv(symbol, interval="1h", limit=24)
     df_hourly = ai_strategy.add_indicators(df_hourly)
     
     fear_greed_index = ai_strategy.get_fear_and_greed_index()
@@ -169,34 +172,37 @@ def ai_trading():
             }
             reflection = ai_strategy.generate_reflection(recent_trades, current_market_data)
             
-            symbol = "BTCUSDT"
             position = binance_trader.get_position(symbol)
             current_position = position if position and float(position.get("positionAmt", 0)) != 0 else None
             
-            result = ai_strategy.get_ai_trading_decision(usdt_balance, btc_price, df_daily, df_hourly, fear_greed_index, current_position)
+            gpt_result = ai_strategy.get_ai_trading_decision(usdt_balance, btc_price, df_daily, df_hourly, fear_greed_index, current_position)
             
-            if result is None:
+            # Temp Test
+            gpt_result.action = "open_long"
+            gpt_result.percentage = 30
+            
+            if gpt_result is None:
                 logger.error("Failed to get AI trading actions.")
                 return
             
-            logger.info(f"AI Action: {result.action.upper()}")
-            logger.info(f"Action Reason: {result.reason}")
-            logger.info(f"Action Percentage: {result.percentage}%")
+            logger.info(f"AI Action: {gpt_result.action.upper()}")
+            logger.info(f"Action Reason: {gpt_result.reason}")
+            logger.info(f"Action Percentage: {gpt_result.percentage}%")
 
             leverage = 10.0
             margin_type = "ISOLATED"
             binance_trader.set_leverage(symbol, leverage)
             binance_trader.set_margin_type(symbol, margin_type)
 
-            order_result = execute_trade(binance_trader, symbol, leverage, result, current_position, usdt_balance, btc_price)
+            order_result = trade_main(binance_trader, symbol, leverage, gpt_result, current_position, usdt_balance, btc_price)
 
-            log_trade(conn, result.action, result.percentage, result.reason, 
+            log_trade(conn, gpt_result.action, gpt_result.percentage, gpt_result.reason, 
                       usdt_balance, btc_price, reflection, order_result)
 
             if order_result["status"] != "success":
-                logger.error(f"{result.action.capitalize()} order failed: {order_result}")
+                logger.error(f"{gpt_result.action.capitalize()} order failed: {order_result}")
             else:
-                logger.info(f"{result.action.capitalize()} order executed successfully: {order_result}")
+                logger.info(f"{gpt_result.action.capitalize()} order executed successfully: {order_result}")
 
     except sqlite3.Error as e:
         logger.error(f"Database connection error: {e}")
