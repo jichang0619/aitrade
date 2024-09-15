@@ -220,7 +220,7 @@ async def main():
     while True:
         await run_trading_job()
         await db_monitor.main()
-        await asyncio.sleep(1800)  # 30분 대기
+        await asyncio.sleep(900)  # 30분 대기
 
 if __name__ == "__main__":
     init_db()
