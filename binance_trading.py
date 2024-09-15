@@ -123,21 +123,35 @@ class BinanceTrading:
         except BinanceAPIException as e:
             logger.error(f"Error getting position amount: {e}")
             return None
-        
+
     def execute_position_action(self, action, symbol, amount, leverage, percentage, use_limit=True, wait_time=300):
         try:
-            leverage = int(leverage)
-            
-            max_leverage = self.get_max_leverage(symbol)
-            if max_leverage is None:
-                return {"status": "failed", "reason": "Unable to fetch max leverage"}
-            
-            if leverage > max_leverage:
-                logger.warning(f"Requested leverage {leverage} exceeds max leverage {max_leverage}. Using max leverage.")
-                leverage = max_leverage
+            current_position = self.get_position(symbol)
+            current_leverage = self.get_current_leverage(symbol)
 
-            self.client.futures_change_leverage(symbol=symbol, leverage=leverage)
-            logger.info(f"Leverage set to {leverage}x for {symbol}")
+            if current_position and float(current_position['positionAmt']) != 0:
+                logger.info(f"Open position detected. Using current leverage: {current_leverage}")
+                leverage = current_leverage
+            else:
+                leverage = int(leverage)
+                max_leverage = self.get_max_leverage(symbol)
+                if max_leverage is None:
+                    return {"status": "failed", "reason": "Unable to fetch max leverage"}
+                
+                if leverage > max_leverage:
+                    logger.warning(f"Requested leverage {leverage} exceeds max leverage {max_leverage}. Using max leverage.")
+                    leverage = max_leverage
+
+                if leverage != current_leverage:
+                    try:
+                        self.client.futures_change_leverage(symbol=symbol, leverage=leverage)
+                        logger.info(f"Leverage set to {leverage}x for {symbol}")
+                    except BinanceAPIException as e:
+                        if e.code == -4161:
+                            logger.warning("Unable to change leverage due to open position. Using current leverage.")
+                            leverage = current_leverage
+                        else:
+                            raise
 
             current_price = self.get_binance_futures_price(symbol)
             if current_price is None:
@@ -178,7 +192,6 @@ class BinanceTrading:
                     return {"status": "success", "order": order}
 
             elif action in ['close_long', 'close_short']:
-                current_position = self.get_position(symbol)
                 if current_position is None or float(current_position['positionAmt']) == 0:
                     return {"status": "failed", "reason": "No open position to close"}
 
@@ -211,6 +224,17 @@ class BinanceTrading:
             logger.error(f"Unexpected error in execute_position_action: {e}")
             return {"status": "failed", "reason": str(e)}
 
+    def get_current_leverage(self, symbol):
+        try:
+            position_info = self.client.futures_position_information(symbol=symbol)
+            for position in position_info:
+                if position['symbol'] == symbol:
+                    return int(position['leverage'])
+            return None
+        except BinanceAPIException as e:
+            logger.error(f"Error fetching current leverage: {e}")
+            return None
+    
     def calculate_quantity(self, symbol, amount_usdt, current_price):
         quantity = amount_usdt / current_price
         return self.adjust_quantity(symbol, quantity)
@@ -222,7 +246,16 @@ class BinanceTrading:
 
         step_size = float(next(filter(lambda x: x['filterType'] == 'LOT_SIZE', symbol_info['filters']))['stepSize'])
         precision = int(round(-math.log(step_size, 10), 0))
-        return round(quantity, precision)
+        
+        # Adjust the quantity to the correct precision
+        adjusted_quantity = math.floor(quantity * (10 ** precision)) / (10 ** precision)
+        
+        # Ensure the quantity is not less than the minimum allowed
+        min_qty = float(next(filter(lambda x: x['filterType'] == 'LOT_SIZE', symbol_info['filters']))['minQty'])
+        if adjusted_quantity < min_qty:
+            adjusted_quantity = min_qty
+
+        return adjusted_quantity
     
     def open_long_position(self, symbol, amount_usdt, leverage, percentage, use_limit=True, wait_time=300):
         return self.execute_position_action('open_long', symbol, amount_usdt, leverage, percentage, use_limit, wait_time)
