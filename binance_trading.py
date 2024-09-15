@@ -123,6 +123,7 @@ class BinanceTrading:
         except BinanceAPIException as e:
             logger.error(f"Error getting position amount: {e}")
             return None
+        
     def execute_position_action(self, action, symbol, amount, leverage, percentage, use_limit=True, wait_time=300):
         try:
             leverage = int(leverage)
@@ -144,9 +145,12 @@ class BinanceTrading:
 
             if action in ['open_long', 'open_short']:
                 adjusted_amount_usdt = math.floor(amount * leverage * (percentage / 100))
+                quantity = self.calculate_quantity(symbol, adjusted_amount_usdt, current_price)
+                
                 logger.info(f"Action: {action}")
                 logger.info(f"AI Percentage: {percentage}%")
                 logger.info(f"Adjusted Amount Order USDT: {adjusted_amount_usdt}")
+                logger.info(f"Quantity: {quantity}")
                 logger.info(f"Current price: {current_price} USDT")
                 logger.info(f"Leverage: {leverage}x")
 
@@ -160,17 +164,17 @@ class BinanceTrading:
                         type='LIMIT',
                         timeInForce='GTC',
                         price=limit_price,
-                        quoteOrderQty=adjusted_amount_usdt
+                        quantity=quantity
                     )
-                    return self.handle_limit_order(order, symbol, side, adjusted_amount_usdt, wait_time)
+                    return self.handle_limit_order(order, symbol, side, quantity, wait_time)
                 else:
                     order = self.client.futures_create_order(
                         symbol=symbol,
                         side=side,
                         type='MARKET',
-                        quoteOrderQty=adjusted_amount_usdt
+                        quantity=quantity
                     )
-                    logger.info(f"{action.capitalize()} executed successfully: {adjusted_amount_usdt} USDT")
+                    logger.info(f"{action.capitalize()} executed successfully: {quantity} {symbol}")
                     return {"status": "success", "order": order}
 
             elif action in ['close_long', 'close_short']:
@@ -179,14 +183,12 @@ class BinanceTrading:
                     return {"status": "failed", "reason": "No open position to close"}
 
                 position_amount = abs(float(current_position['positionAmt']))
-                position_value_usdt = position_amount * current_price
                 close_position_amount = position_amount * (percentage / 100)
 
                 logger.info(f"Action: {action}")
-                logger.info(f"Current position amount: {position_amount} BTC")
-                logger.info(f"Current position value: {position_value_usdt} USDT")
+                logger.info(f"Current position amount: {position_amount} {symbol}")
                 logger.info(f"AI Percentage to close: {percentage}%")
-                logger.info(f"Amount to close: {close_position_amount} BTC")
+                logger.info(f"Amount to close: {close_position_amount} {symbol}")
                 logger.info(f"Current price: {current_price} USDT")
 
                 side = "SELL" if float(current_position['positionAmt']) > 0 else "BUY"
@@ -197,7 +199,7 @@ class BinanceTrading:
                     type='MARKET',
                     quantity=close_position_amount
                 )
-                logger.info(f"{action.capitalize()} executed successfully: {close_position_amount} BTC")
+                logger.info(f"{action.capitalize()} executed successfully: {close_position_amount} {symbol}")
                 return {"status": "success", "order": order}
             else:
                 return {"status": "failed", "reason": f"Invalid action: {action}"}
@@ -209,6 +211,19 @@ class BinanceTrading:
             logger.error(f"Unexpected error in execute_position_action: {e}")
             return {"status": "failed", "reason": str(e)}
 
+    def calculate_quantity(self, symbol, amount_usdt, current_price):
+        quantity = amount_usdt / current_price
+        return self.adjust_quantity(symbol, quantity)
+
+    def adjust_quantity(self, symbol, quantity):
+        symbol_info = self.get_symbol_info(symbol)
+        if symbol_info is None:
+            return quantity
+
+        step_size = float(next(filter(lambda x: x['filterType'] == 'LOT_SIZE', symbol_info['filters']))['stepSize'])
+        precision = int(round(-math.log(step_size, 10), 0))
+        return round(quantity, precision)
+    
     def open_long_position(self, symbol, amount_usdt, leverage, percentage, use_limit=True, wait_time=300):
         return self.execute_position_action('open_long', symbol, amount_usdt, leverage, percentage, use_limit, wait_time)
 

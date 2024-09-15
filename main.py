@@ -178,8 +178,8 @@ def ai_trading():
             gpt_result = ai_strategy.get_ai_trading_decision(usdt_balance, btc_price, df_daily, df_hourly, fear_greed_index, current_position)
             
             # Temp Test
-            gpt_result.action = "open_long"
-            gpt_result.percentage = 30
+            gpt_result.action = "close_long"
+            gpt_result.percentage = 10
             
             if gpt_result is None:
                 logger.error("Failed to get AI trading actions.")
