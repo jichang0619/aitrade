@@ -102,70 +102,44 @@ def execute_trade(binance_trader, symbol, leverage, result, current_position, us
         logger.error(f"Failed to cancel open orders: {cancel_result['reason']}")
         return cancel_result
 
-    # Get current position amount
-    current_position_amount = binance_trader.get_position_amount(symbol)
-    if current_position_amount is None:
-        return {"status": "failed", "reason": "Unable to get current position amount"}
-
-    logger.info(f"Current position amount: {current_position_amount} BTC")
-
-    if result.action in ["open_long", "close_short", "open_short", "close_long"]:
+    try:
         if result.action in ["open_long", "open_short"]:
-            # For opening positions, calculate amount in USDT
-            usdt_amount_to_trade = usdt_balance * 0.95 * (result.percentage / 100)  # Using 95% of available balance
-            amount_to_trade = usdt_amount_to_trade  # Keep in USDT for opening positions
-            logger.info(f"Opening position: {amount_to_trade} USDT")
-        else:  # close_long or close_short
-            # For closing positions, calculate amount in BTC
-            btc_amount_to_close = abs(current_position_amount) * (result.percentage / 100)
-            amount_to_trade = btc_amount_to_close  # Keep in BTC for closing positions
-            logger.info(f"Closing position: {amount_to_trade} BTC")
+            if result.action == "open_long":
+                order_result = binance_trader.open_long_position(symbol, usdt_balance, leverage, result.percentage, use_limit, wait_time)
+            else:
+                order_result = binance_trader.open_short_position(symbol, usdt_balance, leverage, result.percentage, use_limit, wait_time)
+        elif result.action in ["close_long", "close_short"]:
+            if current_position is None:
+                return {"status": "failed", "reason": "No position to close"}
+            position_size = abs(float(current_position['positionAmt']))
+            if result.action == "close_long":
+                order_result = binance_trader.close_long_position(symbol, position_size, result.percentage, use_limit, wait_time)
+            else:
+                order_result = binance_trader.close_short_position(symbol, position_size, result.percentage, use_limit, wait_time)
+        else:
+            return {"status": "failed", "reason": f"Invalid action: {result.action}"}
 
-        max_retries = 3
-        retry_count = 0
-
-        while retry_count < max_retries:
-            try:
-                # Ensure leverage is passed correctly
-                trade_result = binance_trader.execute_position_action(result.action, symbol, amount_to_trade, leverage, use_limit, wait_time)
-
-                if trade_result["status"] == "success":
-                    logger.info(f"{result.action.capitalize()} order executed successfully: {trade_result}")
-                    
-                    # Set stop loss for opening positions
-                    if result.action in ["open_long", "open_short"]:
-                        entry_price = float(trade_result["order"]["avgPrice"])
-                        executed_qty = abs(float(trade_result["order"]["executedQty"]))
-                        stop_loss_result = binance_trader.set_stop_loss(symbol, "BUY" if result.action == "open_long" else "SELL", executed_qty, entry_price)
-                        if stop_loss_result["status"] == "success":
-                            logger.info(f"Stop loss set successfully: {stop_loss_result}")
-                        else:
-                            logger.warning(f"Failed to set stop loss: {stop_loss_result['reason']}. Continuing without stop loss.")
-                    
-                    return trade_result
+        if order_result["status"] == "success":
+            logger.info(f"{result.action.capitalize()} order executed successfully: {order_result}")
+            
+            # Set stop loss for opening positions
+            if result.action in ["open_long", "open_short"]:
+                entry_price = float(order_result["order"]["avgPrice"])
+                executed_qty = abs(float(order_result["order"]["executedQty"]))
+                stop_loss_result = binance_trader.set_stop_loss(symbol, "BUY" if result.action == "open_long" else "SELL", executed_qty, entry_price)
+                if stop_loss_result["status"] == "success":
+                    logger.info(f"Stop loss set successfully: {stop_loss_result}")
                 else:
-                    logger.error(f"{result.action.capitalize()} order failed: {trade_result}")
-                    return trade_result
+                    logger.warning(f"Failed to set stop loss: {stop_loss_result['reason']}. Continuing without stop loss.")
+        else:
+            logger.error(f"{result.action.capitalize()} order failed: {order_result}")
 
-            except BinanceAPIException as e:
-                if e.code == -2019:  # Margin is insufficient
-                    retry_count += 1
-                    if retry_count < max_retries:
-                        logger.warning(f"Insufficient margin. Retry {retry_count}/{max_retries}")
-                        amount_to_trade *= 0.9  # 10% 감소
-                        time.sleep(5)  # 재시도 전 대기
-                    else:
-                        logger.error("Max retries reached. Unable to execute trade due to insufficient margin.")
-                        return {"status": "failed", "reason": "Max retries reached due to insufficient margin"}
-                else:
-                    logger.error(f"Binance API Error: {e}")
-                    return {"status": "failed", "reason": str(e)}
-            except Exception as e:
-                logger.error(f"Unexpected error: {e}")
-                return {"status": "failed", "reason": str(e)}
-    else:
-        return {"status": "failed", "reason": f"Invalid action: {result.action}"}
-    
+        return order_result
+
+    except Exception as e:
+        logger.error(f"Unexpected error in execute_trade: {e}")
+        return {"status": "failed", "reason": str(e)}    
+
 def ai_trading():
     usdt_balance = binance_trader.get_futures_account_balance()
     btc_price = binance_trader.get_binance_futures_price()
@@ -207,6 +181,7 @@ def ai_trading():
             
             logger.info(f"AI Action: {result.action.upper()}")
             logger.info(f"Action Reason: {result.reason}")
+            logger.info(f"Action Percentage: {result.percentage}%")
 
             leverage = 10.0
             margin_type = "ISOLATED"
