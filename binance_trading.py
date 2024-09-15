@@ -47,7 +47,7 @@ class BinanceTrading:
             logger.error(f"Error fetching futures account balance: {e}")
             return 0.0
 
-    def set_stop_loss(self, symbol, side, quantity, entry_price, risk_percentage=2.5):
+    def set_stop_loss(self, symbol, side, leveraged_quantity, entry_price, risk_percentage=2.5):
         try:
             symbol_info = self.get_symbol_info(symbol)
             price_filter = next(filter(lambda f: f['filterType'] == 'PRICE_FILTER', symbol_info['filters']))
@@ -64,13 +64,13 @@ class BinanceTrading:
             stop_price = round(stop_price / tick_size) * tick_size
             
             # Adjust quantity to meet step size requirements
-            quantity = self.adjust_quantity(symbol, quantity * entry_price, entry_price)
+            # leveraged_quantity = self.adjust_quantity(symbol, leveraged_quantity, entry_price)
             
             stop_loss_order = self.client.futures_create_order(
                 symbol=symbol,
                 side=stop_side,
                 type='STOP_MARKET',
-                quantity=quantity,
+                quantity=leveraged_quantity,
                 stopPrice=stop_price
             )
             
