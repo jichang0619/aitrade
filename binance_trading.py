@@ -213,13 +213,15 @@ class BinanceTrading:
                 if current_position is None or float(current_position['positionAmt']) == 0:
                     return {"status": "failed", "reason": "No open position to close"}
 
-                position_amount = abs(float(current_position['positionAmt']))
-                close_amount = position_amount * (percentage / 100)
+                position_amount_btc = abs(float(current_position['positionAmt']))
+                position_value_usdt = position_amount_btc * current_price
+                close_amount_usdt = position_value_usdt * (percentage / 100)
 
                 logger.info(f"Action: {action}")
-                logger.info(f"Current position amount: {position_amount}")
+                logger.info(f"Current position amount: {position_amount_btc} BTC")
+                logger.info(f"Current position value: {position_value_usdt} USDT")
                 logger.info(f"AI Percentage to close: {percentage}%")
-                logger.info(f"Amount to close: {close_amount}")
+                logger.info(f"Amount to close: {close_amount_usdt} USDT")
                 logger.info(f"Current price: {current_price} USDT")
 
                 side = "SELL" if float(current_position['positionAmt']) > 0 else "BUY"
@@ -232,17 +234,17 @@ class BinanceTrading:
                         type='LIMIT',
                         timeInForce='GTC',
                         price=limit_price,
-                        quantity=close_amount
+                        quoteOrderQty=close_amount_usdt
                     )
-                    return self.handle_limit_order(order, symbol, side, close_amount, wait_time, is_close=True)
+                    return self.handle_limit_order(order, symbol, side, close_amount_usdt, wait_time, is_close=True)
                 else:
                     order = self.client.futures_create_order(
                         symbol=symbol,
                         side=side,
                         type='MARKET',
-                        quantity=close_amount
+                        quoteOrderQty=close_amount_usdt
                     )
-                    logger.info(f"{action.capitalize()} executed successfully: {close_amount} {symbol.replace('USDT', '')}")
+                    logger.info(f"{action.capitalize()} executed successfully: {close_amount_usdt} USDT")
                     return {"status": "success", "order": order}
 
             else:
