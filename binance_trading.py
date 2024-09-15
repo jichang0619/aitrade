@@ -27,41 +27,6 @@ class BinanceTrading:
                 logger.error(f"Error fetching symbol information: {e}")
                 return None
         return self.symbol_info[symbol]
-
-    # def adjust_quantity_usdt(self, symbol, amount_usdt, current_price, action, leverage):
-    #     logger.info(f"Adjusting USDT quantity for {symbol}. Amount USDT: {amount_usdt}, Current Coin price: {current_price}, Action: {action}, Leverage: {leverage}")
-        
-    #     symbol_info = self.get_symbol_info(symbol)
-    #     if symbol_info is None:
-    #         logger.warning(f"Symbol info not found for {symbol}. Returning None.")
-    #         return None, None
-
-    #     min_notional_filter = next((f for f in symbol_info['filters'] if f['filterType'] == 'MIN_NOTIONAL'), None)
-
-    #     if min_notional_filter is None:
-    #         logger.warning(f"MIN_NOTIONAL filter not found for {symbol}. Returning None.")
-    #         return None, None
-
-    #     min_notional = float(min_notional_filter['notional'])
-        
-    #     logger.info(f"Minimum notional: {min_notional}")
-
-    #     # Apply leverage to the USDT amount
-    #     leveraged_amount_usdt = amount_usdt * leverage
-
-    #     # Adjust the USDT amount to be an integer
-    #     adjusted_amount_usdt = math.floor(leveraged_amount_usdt)
-
-    #     # Ensure the amount meets the minimum notional value
-    #     if adjusted_amount_usdt < min_notional:
-    #         adjusted_amount_usdt = math.ceil(min_notional)
-
-    #     # Calculate the quantity in the base asset (e.g., BTC)
-    #     quantity = adjusted_amount_usdt / current_price
-
-    #     logger.info(f"Final adjusted USDT amount: {adjusted_amount_usdt} USDT, Equivalent quantity: {quantity} {symbol.replace('USDT', '')}")
-
-    #     return adjusted_amount_usdt, quantity
     
     def adjust_price(self, symbol, price):
         symbol_info = self.get_symbol_info(symbol)
