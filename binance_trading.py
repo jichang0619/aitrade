@@ -27,7 +27,7 @@ class BinanceTrading:
                 logger.error(f"Error fetching symbol information: {e}")
                 return None
         return self.symbol_info[symbol]
-  
+
     def adjust_quantity(self, symbol, amount, current_price, action):
         logger.info(f"Adjusting quantity for {symbol}. Amount: {amount}, Current price: {current_price}, Action: {action}")
         
@@ -78,7 +78,7 @@ class BinanceTrading:
         logger.info(f"Final adjusted quantity: {quantity} BTC, Order value: {order_value_usdt} USDT")
 
         return quantity
-
+    
     def adjust_price(self, symbol, price):
         symbol_info = self.get_symbol_info(symbol)
         if symbol_info is None:
@@ -176,18 +176,20 @@ class BinanceTrading:
     
     def execute_position_action(self, action, symbol, amount, leverage, use_limit=True, wait_time=300):
         try:
-            # Skip leverage setting for closing positions
-            if action not in ['close_long', 'close_short']:
-                max_leverage = self.get_max_leverage(symbol)
-                if max_leverage is None:
-                    return {"status": "failed", "reason": "Unable to fetch max leverage"}
-                
-                if leverage > max_leverage:
-                    logger.warning(f"Requested leverage {leverage} exceeds max leverage {max_leverage}. Using max leverage.")
-                    leverage = max_leverage
+            # Ensure leverage is an integer
+            leverage = int(leverage)
+            
+            # Set leverage for all actions
+            max_leverage = self.get_max_leverage(symbol)
+            if max_leverage is None:
+                return {"status": "failed", "reason": "Unable to fetch max leverage"}
+            
+            if leverage > max_leverage:
+                logger.warning(f"Requested leverage {leverage} exceeds max leverage {max_leverage}. Using max leverage.")
+                leverage = max_leverage
 
-                self.client.futures_change_leverage(symbol=symbol, leverage=leverage)
-                logger.info(f"Leverage set to {leverage}x for {symbol}")
+            self.client.futures_change_leverage(symbol=symbol, leverage=leverage)
+            logger.info(f"Leverage set to {leverage}x for {symbol}")
 
             available_balance = self.get_available_balance(symbol)
             if available_balance is None:
@@ -208,14 +210,8 @@ class BinanceTrading:
                     logger.warning(f"Requested close amount {amount} BTC exceeds current position size {position_amt} BTC. Closing entire position.")
                     amount = position_amt
 
-            # Apply leverage for opening positions
-            if action in ['open_long', 'open_short']:
-                leveraged_amount_usdt = amount * leverage
-            else:
-                leveraged_amount_usdt = amount * current_price  # Convert BTC to USDT for consistency
-
             # Adjust quantity
-            quantity_btc = self.adjust_quantity(symbol, leveraged_amount_usdt, current_price, action)
+            quantity_btc = self.adjust_quantity(symbol, amount, current_price, action)
 
             if quantity_btc is None:
                 return {"status": "failed", "reason": "Cannot meet minimum order requirements"}
