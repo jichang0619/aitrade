@@ -196,7 +196,7 @@ class BinanceTrading:
                     return {"status": "failed", "reason": "No open position to close"}
 
                 position_amount = abs(float(current_position['positionAmt']))
-                close_position_amount = position_amount * (percentage / 100)
+                close_position_amount = self.adjust_quantity(symbol, position_amount * (percentage / 100))
 
                 logger.info(f"Action: {action}")
                 logger.info(f"Current position amount: {position_amount} {symbol}")
@@ -223,7 +223,7 @@ class BinanceTrading:
         except Exception as e:
             logger.error(f"Unexpected error in execute_position_action: {e}")
             return {"status": "failed", "reason": str(e)}
-
+    
     def get_current_leverage(self, symbol):
         try:
             position_info = self.client.futures_position_information(symbol=symbol)

@@ -25,20 +25,58 @@ def fetch_last_trade(db_path):
     conn.close()
     return trade
 
+def get_action_emoji(action):
+    if 'long' in action.lower():
+        return '🚀' if 'open' in action.lower() else '🛬'
+    elif 'short' in action.lower():
+        return '🐻' if 'open' in action.lower() else '🛫'
+    else:
+        return '🔄'
+
 async def send_trade_update(bot):
     trade = fetch_last_trade(DB_PATH)
     if trade:
-        trade_message = f"""Last trade attempt:
-Trade Num: {trade[0]}
-Time: {trade[1]}
-Action: {trade[2]}
-Percentage: {trade[3]}
-Status: {trade[8]}
-Reason: {trade[9]}"""
+        action_emoji = get_action_emoji(trade[2])
+        
+        trade_message = f"""🔔 <b>Last Trade Update</b> 🔔
+
+🔢 <b>Trade Num:</b> {trade[0]}
+🕒 <b>Time:</b> {trade[1]}
+🎯 <b>Action:</b> {action_emoji} {trade[2]}
+📊 <b>Percentage:</b> {trade[3]}%
+🚦 <b>Status:</b> {'✅' if trade[8] == 'success' else '❌'} {trade[8]}
+📝 <b>Order Info:</b> {trade[9]}
+
+💰 <b>USDT Balance:</b> {trade[5]:.2f}
+💲 <b>BTC Price:</b> ${trade[6]:.2f}"""
+
+        ai_reason_message = f"""🤖 <b>AI Action Reasoning</b> 🧠
+
+{trade[4]}"""
+
+        reflection_message = f"""🔮 <b>Trade Reflection</b> 📊
+
+{trade[7]}"""
+
         try:
-            html_message = trade_message.replace('-', '&#45;')
-            await bot.send_message(chat_id=CHAT_ID, text=html_message, parse_mode="HTML")
-            logger.info("Message sent successfully.")
+            # Send initial trade update
+            await bot.send_message(chat_id=CHAT_ID, text=trade_message, parse_mode="HTML")
+            logger.info("Trade update message sent successfully.")
+
+            # Wait for 10 seconds
+            await asyncio.sleep(10)
+
+            # Send AI action reason
+            await bot.send_message(chat_id=CHAT_ID, text=ai_reason_message, parse_mode="HTML")
+            logger.info("AI action reason message sent successfully.")
+
+            # Wait for another 10 seconds
+            await asyncio.sleep(10)
+
+            # Send reflection
+            await bot.send_message(chat_id=CHAT_ID, text=reflection_message, parse_mode="HTML")
+            logger.info("Reflection message sent successfully.")
+
         except Exception as e:
             logger.error(f"Error sending message: {e}")
 
